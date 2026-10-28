@@ -1,0 +1,28 @@
+# 依赖
+node_modules/
+.pnpm-store/
+
+# 构建产物
+dist/
+build/
+src-tauri/target/
+src-tauri/gen/
+
+# 本地草稿 / 临时脚本
+scratch/
+
+# 编辑器与系统
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# 日志与本地环境
+*.log
+.env
+.env.local
+
+# 本地数据库 / 导出
+*.sqlite
+*.db

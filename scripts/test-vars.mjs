@@ -1,0 +1,38 @@
+﻿import { chromium } from "playwright";
+let pass=0,fail=0;
+const ok=(n,c,d="")=>{ if(c){pass++;console.log(`  ✓ ${n}`)}else{fail++;console.log(`  ✗ ${n}${d?" — "+d:""}`)} };
+const sleep=(ms)=>new Promise(r=>setTimeout(r,ms));
+const b=await chromium.launch({channel:"msedge",headless:true});
+const page=await (await b.newContext({viewport:{width:1440,height:900},locale:"zh-CN"})).newPage();
+page.on("pageerror",e=>console.log("[pageerror]",e.message));
+await page.goto("http://127.0.0.1:5273/",{waitUntil:"networkidle"}); await sleep(1600);
+const tabs=await page.$$eval(".tab .label",els=>els.map(e=>e.textContent.trim()));
+ok("页签改名为 测试/批量", tabs.join(",")==="终端,协议,测试,批量,报告", tabs.join(","));
+await page.locator(".product-switch").first().click();
+await page.locator(".menu-item",{hasText:"新建产品"}).click();
+await page.locator(".dlg-input").first().fill("心跳"); await page.locator(".dlg-foot .btn-primary").click(); await sleep(500);
+await page.locator(".sidebar-head .add-btn").click();
+await page.locator(".menu-item",{hasText:"新建子产品"}).click(); await sleep(400);
+await page.locator(".dlg-row",{hasText:"名称"}).locator("input").fill("车");
+await page.locator(".dlg-foot .btn-primary").click(); await sleep(600);
+await page.locator(".link-status").click(); await sleep(300);
+await page.locator(".menu-item",{hasText:"模拟设备"}).click(); await sleep(200);
+await page.locator(".menu-item",{hasText:"连接"}).click(); await sleep(700);
+await page.locator(".tab",{hasText:"测试"}).click(); await sleep(700);
+await page.locator(".btn-primary",{hasText:"一键生成示例用例"}).click(); await sleep(900);
+await page.locator(".dlg-foot .btn-primary").click(); await sleep(600);
+// 设置变量 + 轮间隔
+await page.locator(".chip",{hasText:"设置"}).click(); await sleep(400);
+const vta=page.locator(".setting-row",{hasText:"变量"}).locator("textarea");
+ok("有变量输入框",(await vta.count())===1);
+await vta.fill("score=0+1"); await sleep(400);
+await page.locator(".setting-row",{hasText:"轮间隔"}).locator("input").fill("100");
+await page.locator(".setting-row",{hasText:"重复次数"}).locator("input").fill("3");
+await sleep(500);
+// 把 expect 改成用变量（先改步骤）
+const stepRows=page.locator(".step-row");
+ok("有步骤",(await stepRows.count())>=2);
+await page.screenshot({path:"docs/demo/49-vars.png"});
+await b.close();
+console.log(`\n结果：${pass}/${pass+fail} 通过`);
+if(fail) process.exit(1);
