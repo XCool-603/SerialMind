@@ -78,10 +78,13 @@ Info "推送 $Branch …"
 $pushArgs = @("push", "-u", "origin", $Branch)
 if ($Force) { $pushArgs += "--force" }
 $env:GIT_SSH_COMMAND = "ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20"
+$prevEap = $ErrorActionPreference
+$ErrorActionPreference = "Continue"   # git 把进度写 stderr，别当成异常
 try {
-  & git @pushArgs
+  & git @pushArgs 2>&1 | ForEach-Object { Write-Host "  $_" }
   $code = $LASTEXITCODE
 } finally {
+  $ErrorActionPreference = $prevEap
   Remove-Item Env:GIT_SSH_COMMAND -ErrorAction SilentlyContinue
 }
 
