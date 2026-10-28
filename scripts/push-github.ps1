@@ -1,30 +1,22 @@
 ﻿<#
-  一键推送到 GitHub
+  SerialMind 推送脚本
 
-  用法（在本机网络能通 github.com 的时候执行）：
+  本机情况（已配好）：
+    · remote origin = git@github.com:XCool-603/SerialMind.git
+    · ~/.ssh/config 里把 github.com 指向 ssh.github.com:443（github.com:443 直连被墙）
+    · SSH 公钥已登记到 GitHub
 
-    # 方式 A：用浏览器登录的凭证（推荐，不落盘 Token）
-    .\scripts\push-github.ps1 -Repo https://github.com/你的用户名/SerialMind.git
+  日常推送：
+    .\scripts\push-github.ps1
+    .\scripts\push-github.ps1 -Message "feat: 新增 xxx"
 
-    # 方式 B：用 Personal Access Token（网络恢复后临时用）
-    $env:GITHUB_TOKEN = "ghp_xxx"
-    .\scripts\push-github.ps1 -Repo https://github.com/你的用户名/SerialMind.git -UseToken
-
-  前提：
-    - GitHub 上已经建好空仓库（不要勾选 README / .gitignore / license，否则要先 pull）
-    - 能访问 github.com
-
-  说明：
-    脚本只做 remote 配置 + push，不会改写历史，也不会删除本地文件。
+  换仓库：
+    .\scripts\push-github.ps1 -Repo git@github.com:用户名/仓库.git
 #>
 param(
-  [Parameter(Mandatory = $true)]
   [string]$Repo,
-
   [string]$Branch = "main",
-
-  [switch]$UseToken,
-
+  [string]$Message,
   [switch]$Force
 )
 
@@ -39,105 +31,71 @@ Write-Host ""
 Write-Host "SerialMind -> GitHub" -ForegroundColor Cyan
 Write-Host ("-" * 52)
 
-# 1. 基本检查
 if (-not (Test-Path ".git")) {
   Bad "当前目录不是 git 仓库：$(Get-Location)"
   exit 1
 }
 
-$repoUrl = $Repo.Trim()
-if ($repoUrl -notmatch '^https://github\.com/.+/.+?\.git$') {
-  if ($repoUrl -match '^https://github\.com/[^/]+/[^/]+$') {
-    $repoUrl = "$repoUrl.git"
-    Info "已补全 .git 后缀：$repoUrl"
-  } else {
-    Bad "仓库地址格式不对，应形如 https://github.com/用户名/SerialMind.git"
-    exit 1
+if ($Repo) {
+  $url = $Repo.Trim()
+  if ($url -match '^https://github\.com/([^/]+)/([^/]+?)(\.git)?$') {
+    $url = "git@github.com:$($Matches[1])/$($Matches[2]).git"
+    Info "已转成 SSH 地址：$url"
   }
+  $existing = git remote 2>$null
+  if ($existing -contains "origin") { git remote set-url origin $url | Out-Null } else { git remote add origin $url | Out-Null }
+  Ok "origin -> $url"
 }
 
-# 2. 网络检查
-Info "检查 github.com 连通性…"
-$reachable = $false
-try {
-  $null = Invoke-WebRequest "https://github.com" -UseBasicParsing -TimeoutSec 10
-  $reachable = $true
-} catch {
-  $reachable = $false
+$remote = git remote get-url origin 2>$null
+if (-not $remote) {
+  Bad "还没配 remote。先运行： .\scripts\push-github.ps1 -Repo git@github.com:用户名/仓库.git"
+  exit 1
 }
-if (-not $reachable) {
-  Bad "连不上 github.com。请先解决网络（代理 / VPN），再重新运行本脚本。"
-  Info "本地仓库已就绪，随时可以推："
-  Info "  git remote add origin $repoUrl"
-  Info "  git push -u origin $Branch"
-  exit 2
-}
-Ok "github.com 可达"
+Info "remote: $remote"
 
-# 3. 配 remote
-$existing = git remote 2>$null
-if ($existing -contains "origin") {
-  git remote set-url origin $repoUrl | Out-Null
-  Info "已更新 origin -> $repoUrl"
-} else {
-  git remote add origin $repoUrl | Out-Null
-  Info "已添加 origin -> $repoUrl"
-}
-
-# 4. 确认工作区干净
 $dirty = git status --porcelain
 if ($dirty) {
-  Info "有未提交改动，先自动提交…"
+  $msg = if ($Message) { $Message } else { "chore: 自动提交 $(Get-Date -Format 'yyyy-MM-dd HH:mm')" }
   git add -A | Out-Null
-  git -c core.autocrlf=false commit -q -m "chore: 推送前自动提交" | Out-Null
-  Ok "已提交"
+  git -c core.autocrlf=false commit -q -m $msg | Out-Null
+  Ok "已提交：$msg"
+} else {
+  Info "工作区干净，无需提交"
 }
 
-# 5. 推送
-Write-Host ""
-Info "开始推送 $Branch …"
+if ($remote -match '^git@|^ssh://') {
+  $t = Test-NetConnection -ComputerName ssh.github.com -Port 443 -InformationLevel Quiet -WarningAction SilentlyContinue
+  if (-not $t) {
+    Bad "连不上 ssh.github.com:443，检查网络 / 代理"
+    exit 2
+  }
+  Ok "ssh.github.com:443 可达"
+}
 
+Write-Host ""
+Info "推送 $Branch …"
 $pushArgs = @("push", "-u", "origin", $Branch)
 if ($Force) { $pushArgs += "--force" }
-
-if ($UseToken) {
-  if (-not $env:GITHUB_TOKEN) {
-    Bad "你用了 -UseToken，但没设置环境变量 GITHUB_TOKEN"
-    Info '先在当前窗口执行： $env:GITHUB_TOKEN = "ghp_xxx"'
-    exit 1
-  }
-  # 用临时 askpass 传 token，不写进 .git/config
-  $askpass = Join-Path $env:TEMP "sm-askpass-$PID.cmd"
-  @"
-@echo off
-echo %~1 | findstr /i "Username" >nul && (echo x-access-token) || (echo %GITHUB_TOKEN%)
-"@ | Set-Content -Path $askpass -Encoding ASCII
-  $env:GIT_ASKPASS = $askpass
-  $env:GIT_TERMINAL_PROMPT = "0"
-  try {
-    & git @pushArgs
-  } finally {
-    Remove-Item $askpass -ErrorAction SilentlyContinue
-    Remove-Item Env:GIT_ASKPASS -ErrorAction SilentlyContinue
-    Remove-Item Env:GIT_TERMINAL_PROMPT -ErrorAction SilentlyContinue
-  }
-} else {
+$env:GIT_SSH_COMMAND = "ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20"
+try {
   & git @pushArgs
+  $code = $LASTEXITCODE
+} finally {
+  Remove-Item Env:GIT_SSH_COMMAND -ErrorAction SilentlyContinue
 }
 
-if ($LASTEXITCODE -eq 0) {
+if ($code -eq 0) {
   Write-Host ""
   Ok "推送成功"
-  $url = $repoUrl -replace '\.git$', ''
-  Info "仓库地址：$url"
+  $web = $remote -replace '^git@github\.com:', 'https://github.com/' -replace '\.git$', ''
+  Info "仓库：$web"
   Info "提交：$(git log --oneline -1)"
   exit 0
 } else {
   Write-Host ""
-  Bad "推送失败（退出码 $LASTEXITCODE）"
-  Info "常见原因："
-  Info "  · 仓库不存在 / 名字不对 -> 先到 GitHub 建空仓库"
-  Info "  · 没权限 -> 用 -UseToken 并设置 GITHUB_TOKEN"
-  Info "  · 远程已有提交 -> 先 git pull --rebase origin $Branch"
+  Bad "推送失败（退出码 $code）"
+  Info "· 仓库不存在 / 没权限 -> 检查地址和 SSH key"
+  Info "· 远程有本地没有的提交 -> 先 git pull --rebase origin $Branch"
   exit 1
 }
