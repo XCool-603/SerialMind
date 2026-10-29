@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { encodeMessage } from "../engine/codec";
 import { toHex } from "../engine/bytes";
 import { useStore } from "../engine/store";
-import type { CasePacketAction, FieldActionRule, CaseStep } from "../engine/types";
+import type { CasePacketAction, CaseStep } from "../engine/types";
 import { HEARTBEAT_PROTOCOL, VEHICLE_WALK_PROTOCOL, type PdlProtocol } from "../engine/pdl";
 import { Icon, IC } from "../components/Icon";
 import { EmptyState } from "../components/Empty";
@@ -14,22 +14,31 @@ function computeActionPreview(proto: PdlProtocol | undefined, action: CasePacket
   if (!msg) return { hex: "—", len: 0, valSummary: "" };
 
   try {
+    // 1. 基准值 100% 动态读取协议中当前定义的最新字段与默认值
     const vals: Record<string, number | string | boolean> = {};
     for (const f of msg.fields) {
       if (f.type === "crc" || f.offset < 0) continue;
       vals[f.name] = Number(f.value ?? 0);
     }
+    // 2. 只有当前协议依然存在的字段，才应用用例自定义覆盖与步长
     for (const r of action.fields ?? []) {
-      vals[r.fieldName] = r.initValue + (r.step * round);
+      const fld = msg.fields.find((f) => f.name === r.fieldName);
+      if (!fld) continue;
+      const base = r.customInit !== undefined
+        ? r.customInit
+        : (r.initValue !== undefined && r.initValue !== null ? r.initValue : Number(fld.value ?? 0));
+      const step = r.step ?? 0;
+      vals[r.fieldName] = base + (step * round);
     }
     const bytes = encodeMessage(proto, msg, vals);
-    const valSummary = Object.entries(vals)
-      .map(([k, v]) => `${k}=${v}`)
+    const valSummary = msg.fields
+      .filter((f) => f.type !== "crc" && f.offset >= 0 && action.fields?.some((af) => af.fieldName === f.name && af.step !== 0))
+      .map((f) => `${f.name}=${vals[f.name]}`)
       .join(", ");
     return {
       hex: toHex(bytes),
       len: bytes.length,
-      valSummary: valSummary || "固定值",
+      valSummary: valSummary || "基准值",
     };
   } catch (e) {
     return { hex: "组包错误: " + (e as Error).message, len: 0, valSummary: "" };
@@ -107,15 +116,6 @@ export function CasePage() {
     }
     const targetProto = protoId ? protocols.find((p) => p.id === protoId) ?? protocols[0] : (protocols[actions.length % protocols.length] ?? protocols[0]);
     const targetMsg = targetProto.messages[0];
-    const initialFields: FieldActionRule[] = targetMsg
-      ? targetMsg.fields
-          .filter((f) => f.type !== "crc" && f.offset >= 0)
-          .map((f) => ({
-            fieldName: f.name,
-            initValue: Number(f.value ?? 0),
-            step: 0,
-          }))
-      : [];
 
     const newAct: CasePacketAction = {
       id: `act_${Date.now()}`,
@@ -124,7 +124,7 @@ export function CasePage() {
       messageId: targetMsg?.id,
       intervalMs: active.intervalMs ?? 1000,
       enabled: true,
-      fields: initialFields,
+      fields: [], // 纯动态：默认 100% 动态读取 targetProto 的字段与默认值，无需存死字段快照！
     };
     saveActions([...actions, newAct]);
   };
@@ -159,15 +159,11 @@ export function CasePage() {
       messageId: hbMsg?.id,
       intervalMs: 1000,
       enabled: true,
-      fields: (hbMsg?.fields ?? [])
-        .filter((f) => f.type !== "crc" && f.offset >= 0)
-        .map((f) => ({
-          fieldName: f.name,
-          initValue: Number(f.value ?? 0),
-          step: 0, // 固定不变
-        })),
+      fields: [], // 动态读取心跳协议字段，步长默认为 0
     };
 
+    // 车辆行走协议中，找到距离字段，设置步长 +10
+    const distFld = (vmMsg?.fields ?? []).find((f) => f.name.includes("distance") || f.name.includes("pos") || f.name.includes("dist"));
     const act2: CasePacketAction = {
       id: `act_move_${Date.now() + 1}`,
       name: "每秒车辆行走+10米",
@@ -175,16 +171,7 @@ export function CasePage() {
       messageId: vmMsg?.id,
       intervalMs: 1000,
       enabled: true,
-      fields: (vmMsg?.fields ?? [])
-        .filter((f) => f.type !== "crc" && f.offset >= 0)
-        .map((f) => {
-          const isDist = f.name.includes("distance") || f.name.includes("pos") || f.name.includes("dist");
-          return {
-            fieldName: f.name,
-            initValue: Number(f.value ?? 0),
-            step: isDist ? 10 : 0, // 行走每秒 +10
-          };
-        }),
+      fields: distFld ? [{ fieldName: distFld.name, step: 10 }] : [],
     };
 
     saveActions([act1, act2]);
@@ -300,7 +287,7 @@ export function CasePage() {
           </div>
         </div>
 
-        {/* 中间：纯图形化用例编排（免代码，从我添加的协议中选） */}
+        {/* 中间：纯图形化用例编排（免代码，100% 动态读取用户协议的字段） */}
         <div className="case-main" style={{ overflowY: "auto", padding: "16px 20px" }}>
           {/* 用例顶栏 */}
           <div className="case-head" style={{ marginBottom: 14 }}>
@@ -380,7 +367,7 @@ export function CasePage() {
           <div className="quick-preset-banner">
             <div>
               <div className="title">心跳与行走场景一键配置</div>
-              <div className="desc">从您添加的协议中直接载入「心跳协议」与「车辆行走协议(+10米/秒)」，并在界面中随时增减字段与步长。</div>
+              <div className="desc">从您添加的协议中直接载入「心跳协议」与「车辆行走协议(+10米/秒)」，字段完全实时动态跟随协议最新定义。</div>
             </div>
             <button
               className="btn-primary"
@@ -402,7 +389,7 @@ export function CasePage() {
           </div>
 
           {actions.map((act, actIdx) => {
-            // 直接从用户添加的协议中查找对应的协议
+            // 直接从用户添加的协议中查找对应的协议！
             const currentProto = protocols.find((p) => p.id === act.protocolId) ?? protocols[0];
             const currentMsg = (act.messageId ? currentProto?.messages.find((m) => m.id === act.messageId) : null) ?? currentProto?.messages[0];
             const prev1 = computeActionPreview(currentProto, act, 0);
@@ -433,7 +420,7 @@ export function CasePage() {
                     }}
                   />
 
-                  {/* 核心改动：直接从我添加的协议列表中选！ */}
+                  {/* 核心：直接从我添加的协议列表中选！ */}
                   <span style={{ fontSize: 11, color: "var(--t2)", marginLeft: 6, fontWeight: 500 }}>选择下发协议:</span>
                   <select
                     className="cell-select"
@@ -443,22 +430,14 @@ export function CasePage() {
                       const selectedProto = protocols.find((p) => p.id === e.target.value);
                       if (!selectedProto) return;
                       const msg = selectedProto.messages[0];
-                      const newFields: FieldActionRule[] = msg
-                        ? msg.fields
-                            .filter((f) => f.type !== "crc" && f.offset >= 0)
-                            .map((f) => ({
-                              fieldName: f.name,
-                              initValue: Number(f.value ?? 0),
-                              step: 0,
-                            }))
-                        : [];
+                      // 切换协议时清空旧协议字段步长，自动动态展示新协议所有最新字段！
                       const next = actions.map((a, i) =>
                         i === actIdx
                           ? {
                               ...a,
                               protocolId: selectedProto.id,
                               messageId: msg?.id,
-                              fields: newFields,
+                              fields: [],
                               name: a.name.startsWith("下发") ? `下发「${selectedProto.name}」` : a.name,
                             }
                           : a,
@@ -490,15 +469,20 @@ export function CasePage() {
                   </button>
                 </div>
 
-                {/* 任务卡片主体：该协议的字段与增量规则表 */}
+                {/* 任务卡片主体：100% 动态读取用户协议的字段！ */}
                 <div className="action-task-body">
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: 11, color: "var(--t3)", marginBottom: 4 }}>
+                    <span>协议字段直接跟随「{currentProto?.name}」的实时定义（协议页增减字段或修改默认值自动生效）：</span>
+                    <span style={{ color: "var(--t4)", fontSize: 10 }}>共 {currentMsg?.fields.filter((f) => f.type !== "crc" && f.offset >= 0).length ?? 0} 个可控字段</span>
+                  </div>
+
                   <table className="proto-field-table">
                     <thead>
                       <tr>
-                        <th style={{ width: "24%" }}>协议字段</th>
-                        <th style={{ width: "20%" }}>初始基准值</th>
-                        <th style={{ width: "26%" }}>每秒/每轮变化 (加多少)</th>
-                        <th style={{ width: "30%" }}>动态推演 (第1秒 → 第2秒 → 第3秒)</th>
+                        <th style={{ width: "26%" }}>协议字段</th>
+                        <th style={{ width: "22%" }}>初始基准值</th>
+                        <th style={{ width: "24%" }}>每秒/每轮变化 (加多少)</th>
+                        <th style={{ width: "28%" }}>动态推演 (第1秒 → 第2秒 → 第3秒)</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -506,12 +490,42 @@ export function CasePage() {
                         .filter((f) => f.type !== "crc" && f.offset >= 0)
                         .map((fld) => {
                           const rule = (act.fields ?? []).find((r) => r.fieldName === fld.name);
-                          const initVal = rule ? rule.initValue : Number(fld.value ?? 0);
-                          const stepVal = rule ? rule.step : 0;
+                          // 协议当前最新默认值
+                          const protoDefault = Number(fld.value ?? 0);
+                          // 当前基准值：未显式自定义时严格跟随协议当前的默认值
+                          const initVal = rule?.customInit !== undefined ? rule.customInit : protoDefault;
+                          const isCustom = rule?.customInit !== undefined && rule.customInit !== protoDefault;
+                          const stepVal = rule?.step ?? 0;
 
-                          const updateField = (newInit: number, newStep: number) => {
+                          const updateFieldInit = (newInit: number) => {
                             const rest = (act.fields ?? []).filter((r) => r.fieldName !== fld.name);
-                            rest.push({ fieldName: fld.name, initValue: newInit, step: newStep });
+                            rest.push({
+                              fieldName: fld.name,
+                              customInit: newInit,
+                              initValue: newInit,
+                              step: stepVal,
+                            });
+                            const next = actions.map((a, i) => (i === actIdx ? { ...a, fields: rest } : a));
+                            saveActions(next);
+                          };
+
+                          const updateFieldStep = (newStep: number) => {
+                            const rest = (act.fields ?? []).filter((r) => r.fieldName !== fld.name);
+                            rest.push({
+                              fieldName: fld.name,
+                              customInit: rule?.customInit,
+                              initValue: initVal,
+                              step: newStep,
+                            });
+                            const next = actions.map((a, i) => (i === actIdx ? { ...a, fields: rest } : a));
+                            saveActions(next);
+                          };
+
+                          const resetToProtoDefault = () => {
+                            const rest = (act.fields ?? []).filter((r) => r.fieldName !== fld.name);
+                            if (stepVal !== 0) {
+                              rest.push({ fieldName: fld.name, step: stepVal });
+                            }
                             const next = actions.map((a, i) => (i === actIdx ? { ...a, fields: rest } : a));
                             saveActions(next);
                           };
@@ -520,34 +534,49 @@ export function CasePage() {
                             <tr key={fld.id}>
                               <td>
                                 <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                                  <span style={{ fontWeight: 600 }}>{fld.name}</span>
+                                  <span style={{ fontWeight: 600, color: "var(--t1)" }}>{fld.name}</span>
                                   <span style={{ fontSize: 9, color: "var(--t4)" }}>
                                     ({fld.size}B {fld.type}{fld.unit ? ` · ${fld.unit}` : ""})
                                   </span>
                                 </div>
-                                {fld.desc && <div style={{ fontSize: 9, color: "var(--t4)" }}>{fld.desc}</div>}
+                                <div style={{ fontSize: 9, color: "var(--t4)", display: "flex", alignItems: "center", gap: 6 }}>
+                                  {fld.desc && <span>{fld.desc} · </span>}
+                                  <span>协议默认: {protoDefault}</span>
+                                </div>
                               </td>
                               <td>
-                                <input
-                                  type="number"
-                                  className="proto-input"
-                                  style={{ width: 85 }}
-                                  value={initVal}
-                                  onChange={(e) => updateField(Number(e.target.value), stepVal)}
-                                />
+                                <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                                  <input
+                                    type="number"
+                                    className="proto-input"
+                                    style={{ width: 80, borderColor: isCustom ? "var(--accent)" : "var(--line-2)" }}
+                                    value={initVal}
+                                    onChange={(e) => updateFieldInit(Number(e.target.value))}
+                                  />
+                                  {isCustom && (
+                                    <button
+                                      className="btn sm"
+                                      style={{ height: 20, fontSize: 9, padding: "0 4px", color: "var(--accent)" }}
+                                      onClick={resetToProtoDefault}
+                                      title="重置为协议定义的最新默认值"
+                                    >
+                                      跟随协议
+                                    </button>
+                                  )}
+                                </div>
                               </td>
                               <td>
                                 <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                                   <input
                                     type="number"
                                     className="proto-input"
-                                    style={{ width: 80 }}
+                                    style={{ width: 75 }}
                                     placeholder="0 (不变)"
                                     value={stepVal}
-                                    onChange={(e) => updateField(initVal, Number(e.target.value))}
+                                    onChange={(e) => updateFieldStep(Number(e.target.value))}
                                   />
                                   {stepVal === 0 ? (
-                                    <span style={{ fontSize: 10, color: "var(--t4)" }}>固定不变</span>
+                                    <span style={{ fontSize: 10, color: "var(--t4)" }}>固定</span>
                                   ) : (
                                     <span style={{ fontSize: 10, color: stepVal > 0 ? "var(--green)" : "var(--amber)", fontWeight: 600 }}>
                                       {stepVal > 0 ? `+${stepVal}/秒` : `${stepVal}/秒`}

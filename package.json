@@ -45,6 +45,7 @@
     "test:stress": "node scripts/test-stress.mjs",
     "test:frame:ui": "node scripts/test-frame3-ui.mjs",
     "test:user-scenario": "tsx scripts/test-user-scenario.ts",
+    "test:sync": "tsx scripts/test-protocol-field-sync.ts",
     "demo": "node scripts/demo.mjs"
   },
   "dependencies": {

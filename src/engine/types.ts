@@ -101,8 +101,9 @@ export interface Frame {
 /** 纯界面配置：报文字段值与增量规则 */
 export interface FieldActionRule {
   fieldName: string;
-  initValue: number;
-  step: number; // 每次加多少（如 10）
+  initValue?: number;
+  customInit?: number; // 用户在用例中显式覆盖的初始值（未覆盖时自动跟随协议最新默认值）
+  step?: number; // 每次加多少（如 10）
 }
 
 /** 纯界面配置：报文动作发送任务（如：每秒发送心跳协议、每秒车辆行走协议+10米） */

@@ -706,13 +706,22 @@ async function runOnce(
         const msg = (act.messageId ? proto.messages.find((m) => m.id === act.messageId) : null) ?? proto.messages[0];
         if (!msg) continue;
 
+        // 协议字段是第一真相来源：基准值 100% 动态读取协议当前的最新定义
         const values: Record<string, number | string | boolean> = {};
         for (const fld of msg.fields) {
           if (fld.type === "crc" || fld.offset < 0) continue;
           values[fld.name] = Number(fld.value ?? 0);
         }
+
+        // 应用用例中针对字段配置的增量与覆盖（只有协议中当前存在的字段才应用）
         for (const fr of act.fields ?? []) {
-          const curVal = fr.initValue + (fr.step * r);
+          const fld = msg.fields.find((f) => f.name === fr.fieldName);
+          if (!fld) continue;
+          const base = fr.customInit !== undefined
+            ? fr.customInit
+            : (fr.initValue !== undefined && fr.initValue !== null ? fr.initValue : Number(fld.value ?? 0));
+          const step = fr.step ?? 0;
+          const curVal = base + (step * r);
           values[fr.fieldName] = curVal;
           runtimeVars[fr.fieldName] = curVal;
           row[fr.fieldName] = String(curVal);
@@ -734,7 +743,10 @@ async function runOnce(
             failed = true;
           }
         }
-        const displayVals = (act.fields ?? []).map((fr) => `${fr.fieldName}=${values[fr.fieldName]}`).join(", ");
+        const displayVals = msg.fields
+          .filter((f) => f.type !== "crc" && f.offset >= 0)
+          .map((f) => `${f.name}=${values[f.name]}`)
+          .join(", ");
         items.push({
           stepId: `${act.id}_r${r}`,
           kind: "send",
