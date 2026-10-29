@@ -127,185 +127,178 @@ export function TopBar() {
         )}
       </div>
 
-      {/* 串口选择器（运行时） */}
-      <div style={{ position: "relative" }}>
-        <button
-          className="link-status"
-          onClick={() => {
-            setPortMenu((v) => !v);
-            void refreshPorts();
+      {/* 串口直接控制栏（SSCom直观体验：端口+波特率+一键开关+参数） */}
+      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <select
+          className="cell-select"
+          style={{ height: 26, fontSize: 11, background: "var(--bg-panel-2)", border: "1px solid var(--line-2)", color: "var(--t1)", borderRadius: 4, padding: "0 6px", fontWeight: 600, maxWidth: 160 }}
+          value={connection.port}
+          onFocus={() => void refreshPorts()}
+          onChange={(e) => {
+            useStore.setState((s) => ({ connection: { ...s.connection, port: e.target.value } }));
           }}
-          title="选择串口 / 波特率"
+          disabled={connection.connected}
+          title="选择串口设备"
         >
-          <span className={connection.connected ? "dot on" : "dot off"} />
-          <span className="link-port">{connection.port === "__mock__" ? "模拟设备" : connection.port || "选择串口"}</span>
-          <span className="link-param">{connection.baud}</span>
-          <span className="link-param" title="数据位/校验/停止位">{connection.frame}</span>
-          <span className={connection.connected ? "pill green" : "pill gray"}>{connection.connected ? "已连接" : "未连接"}</span>
-          <Icon cp={IC.chevronDown} size={12} color="var(--t3)" />
-        </button>
+          {availablePorts.length === 0 && <option value="">未检测到串口</option>}
+          {availablePorts.map((p) => (
+            <option key={p.name} value={p.name}>{p.name} {p.detail ? `(${p.detail})` : ""}</option>
+          ))}
+          <option value="__mock__">模拟设备 (回环测试)</option>
+        </select>
 
-        {portMenu && (
-          <>
-            <div className="menu-mask" onClick={() => setPortMenu(false)} />
-            <div className="menu" style={{ minWidth: 300 }}>
-              <div className="menu-title" style={{ display: "flex", alignItems: "center" }}>
-                <span>串口</span>
-                <button
-                  className="btn sm"
-                  style={{ marginLeft: "auto" }}
-                  onClick={() => void refreshPorts()}
-                >
-                  <Icon cp={IC.refresh} size={10} color="var(--t2)" />
-                  重新扫描
-                </button>
-              </div>
-              {availablePorts.length === 0 && (
-                <div className="menu-item" style={{ color: "var(--t4)", cursor: "default" }}>
-                  没扫描到串口（插上设备后点重新扫描）
-                </div>
-              )}
-              {availablePorts.map((p) => (
-                <button
-                  key={p.name}
-                  className={p.name === connection.port ? "menu-item active" : "menu-item"}
-                  onClick={() => {
-                    useStore.setState((s) => ({ connection: { ...s.connection, port: p.name } }));
-                  }}
-                >
-                  <Icon cp={IC.link} size={11} color={p.name === connection.port ? "var(--accent)" : "var(--t4)"} />
-                  <span>{p.name}</span>
-                  <span style={{ marginLeft: 6, color: "var(--t4)", fontSize: 9 }}>{p.detail}</span>
-                </button>
-              ))}
-              <div className="menu-sep" />
-              <button
-                className={connection.port === "__mock__" ? "menu-item active" : "menu-item"}
-                onClick={() => {
-                  useStore.setState((s) => ({ connection: { ...s.connection, port: "__mock__" } }));
-                }}
-              >
-                <Icon cp={IC.refresh} size={11} color={connection.port === "__mock__" ? "var(--accent)" : "var(--purple)"} />
-                <span>模拟设备（回环，不用硬件）</span>
-              </button>
-              <div className="menu-sep" />
-              <div className="menu-title">波特率</div>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 4, padding: "0 8px 6px" }}>
-                {BAUD_OPTIONS.map((b) => (
-                  <button
-                    key={b}
-                    className={baud === b ? "alg-chip active" : "alg-chip"}
-                    onClick={() => {
-                      setBaud(b);
-                      useStore.setState((s) => ({ connection: { ...s.connection, baud: b } }));
-                    }}
-                  >
-                    {b}
-                  </button>
-                ))}
-              </div>
-              <div className="menu-sep" />
-              <div className="menu-title">数据位 / 校验 / 停止位 / 流控</div>
-              <div style={{ display: "flex", gap: 4, padding: "0 8px 6px", flexWrap: "wrap" }}>
-                {(["8N1", "8E1", "7E1", "8O1", "7N2"] as const).map((preset) => (
-                  <button
-                    key={preset}
-                    className={connection.frame === preset ? "alg-chip active" : "alg-chip"}
-                    onClick={() => {
-                      const db = Number(preset[0]);
-                      const par = preset[1] === "E" ? "even" : preset[1] === "O" ? "odd" : "none";
-                      const sb = Number(preset[2]);
-                      setSerialParam({ dataBits: db, parity: par, stopBits: sb });
-                    }}
-                  >
-                    {preset}
-                  </button>
-                ))}
-              </div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4, padding: "0 8px 6px" }}>
-                <select
-                  className="cell-select"
-                  style={{ height: 22, fontSize: 10, background: "var(--bg-panel-2)", border: "1px solid var(--line-2)", borderRadius: 4 }}
-                  value={connection.dataBits}
-                  onChange={(e) => setSerialParam({ dataBits: Number(e.target.value) })}
-                >
-                  {[5, 6, 7, 8].map((n) => (
-                    <option key={n} value={n}>数据位 {n}</option>
-                  ))}
-                </select>
-                <select
-                  className="cell-select"
-                  style={{ height: 22, fontSize: 10, background: "var(--bg-panel-2)", border: "1px solid var(--line-2)", borderRadius: 4 }}
-                  value={connection.parity}
-                  onChange={(e) => setSerialParam({ parity: e.target.value as "none" | "odd" | "even" })}
-                >
-                  <option value="none">无校验 N</option>
-                  <option value="odd">奇校验 O</option>
-                  <option value="even">偶校验 E</option>
-                </select>
-                <select
-                  className="cell-select"
-                  style={{ height: 22, fontSize: 10, background: "var(--bg-panel-2)", border: "1px solid var(--line-2)", borderRadius: 4 }}
-                  value={connection.stopBits}
-                  onChange={(e) => setSerialParam({ stopBits: Number(e.target.value) })}
-                >
-                  <option value={1}>停止位 1</option>
-                  <option value={2}>停止位 2</option>
-                </select>
-                <select
-                  className="cell-select"
-                  style={{ height: 22, fontSize: 10, background: "var(--bg-panel-2)", border: "1px solid var(--line-2)", borderRadius: 4 }}
-                  value={connection.flowControl}
-                  onChange={(e) => setSerialParam({ flowControl: e.target.value as "none" | "hardware" | "software" })}
-                >
-                  <option value="none">无流控</option>
-                  <option value="hardware">硬件流控</option>
-                  <option value="software">软件流控</option>
-                </select>
-              </div>
-              <div style={{ fontSize: 9, color: "var(--t4)", padding: "0 10px 6px" }}>
-                当前：{connection.frame} · 参数会记住，下次自动带出
-              </div>
-              <div className="menu-sep" />
-              {connection.connected ? (
-                <button
-                  className="menu-item danger"
-                  onClick={() => {
-                    void disconnectPort();
-                    setPortMenu(false);
-                  }}
-                >
-                  <Icon cp={IC.close} size={11} color="var(--red)" />
-                  <span>断开连接</span>
-                </button>
-              ) : (
-                <button
-                  className="menu-item"
-                  onClick={() => {
-                    void connectPort(connection.port || availablePorts[0]?.name, baud);
-                    setPortMenu(false);
-                  }}
-                >
-                  <Icon cp={IC.check} size={11} color="var(--green)" />
-                  <span>连接 {connection.port || availablePorts[0]?.name || "（未选择端口）"}</span>
-                </button>
-              )}
-            </div>
-          </>
+        <select
+          className="cell-select"
+          style={{ height: 26, fontSize: 11, background: "var(--bg-panel-2)", border: "1px solid var(--line-2)", color: "var(--t1)", borderRadius: 4, padding: "0 6px", width: 85 }}
+          value={baud}
+          onChange={(e) => {
+            const b = Number(e.target.value);
+            setBaud(b);
+            useStore.setState((s) => ({ connection: { ...s.connection, baud: b } }));
+          }}
+          disabled={connection.connected}
+          title="波特率"
+        >
+          {BAUD_OPTIONS.map((b) => (
+            <option key={b} value={b}>{b}</option>
+          ))}
+        </select>
+
+        {connection.connected ? (
+          <button
+            className="btn"
+            style={{ height: 26, padding: "0 12px", fontSize: 11, background: "var(--red)", borderColor: "var(--red)", color: "#fff", fontWeight: 600, display: "flex", alignItems: "center", gap: 5 }}
+            onClick={() => void disconnectPort()}
+            title="点击关闭当前串口"
+          >
+            <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#fff", display: "inline-block" }} />
+            <span>关闭串口</span>
+          </button>
+        ) : (
+          <button
+            className="btn-primary"
+            style={{ height: 26, padding: "0 12px", fontSize: 11, background: "var(--green)", borderColor: "var(--green)", color: "#fff", fontWeight: 600, display: "flex", alignItems: "center", gap: 5 }}
+            onClick={() => void connectPort(connection.port || availablePorts[0]?.name, baud)}
+            title="点击打开选中的串口"
+          >
+            <Icon cp={IC.play} size={10} color="#fff" />
+            <span>打开串口</span>
+          </button>
         )}
+
+        <div style={{ position: "relative" }}>
+          <button
+            className="btn sm"
+            style={{ height: 26, fontSize: 10, padding: "0 6px", color: "var(--t3)" }}
+            onClick={() => setPortMenu((v) => !v)}
+            title="数据位 / 校验位 / 停止位 / 流控 高级设置"
+          >
+            <span>{connection.frame}</span>
+            <Icon cp={IC.settings} size={10} color="var(--t4)" />
+          </button>
+
+          {portMenu && (
+            <>
+              <div className="menu-mask" onClick={() => setPortMenu(false)} />
+              <div className="menu" style={{ minWidth: 260, right: 0, left: "auto" }}>
+                <div className="menu-title" style={{ display: "flex", alignItems: "center" }}>
+                  <span>串口参数</span>
+                  <button
+                    className="btn sm"
+                    style={{ marginLeft: "auto" }}
+                    onClick={() => void refreshPorts()}
+                  >
+                    <Icon cp={IC.refresh} size={10} color="var(--t2)" />
+                    刷新串口
+                  </button>
+                </div>
+                <div className="menu-sep" />
+                <div className="menu-title">数据位 / 校验 / 停止位</div>
+                <div style={{ display: "flex", gap: 4, padding: "0 8px 6px", flexWrap: "wrap" }}>
+                  {(["8N1", "8E1", "7E1", "8O1", "7N2"] as const).map((preset) => (
+                    <button
+                      key={preset}
+                      className={connection.frame === preset ? "alg-chip active" : "alg-chip"}
+                      onClick={() => {
+                        const db = Number(preset[0]);
+                        const par = preset[1] === "E" ? "even" : preset[1] === "O" ? "odd" : "none";
+                        const sb = Number(preset[2]);
+                        setSerialParam({ dataBits: db, parity: par, stopBits: sb });
+                      }}
+                    >
+                      {preset}
+                    </button>
+                  ))}
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4, padding: "0 8px 6px" }}>
+                  <select
+                    className="cell-select"
+                    style={{ height: 22, fontSize: 10, background: "var(--bg-panel-2)", border: "1px solid var(--line-2)", borderRadius: 4 }}
+                    value={connection.dataBits}
+                    onChange={(e) => setSerialParam({ dataBits: Number(e.target.value) })}
+                  >
+                    {[5, 6, 7, 8].map((n) => (
+                      <option key={n} value={n}>数据位 {n}</option>
+                    ))}
+                  </select>
+                  <select
+                    className="cell-select"
+                    style={{ height: 22, fontSize: 10, background: "var(--bg-panel-2)", border: "1px solid var(--line-2)", borderRadius: 4 }}
+                    value={connection.parity}
+                    onChange={(e) => setSerialParam({ parity: e.target.value as "none" | "odd" | "even" })}
+                  >
+                    <option value="none">无校验 N</option>
+                    <option value="odd">奇校验 O</option>
+                    <option value="even">偶校验 E</option>
+                  </select>
+                  <select
+                    className="cell-select"
+                    style={{ height: 22, fontSize: 10, background: "var(--bg-panel-2)", border: "1px solid var(--line-2)", borderRadius: 4 }}
+                    value={connection.stopBits}
+                    onChange={(e) => setSerialParam({ stopBits: Number(e.target.value) })}
+                  >
+                    <option value={1}>停止位 1</option>
+                    <option value={2}>停止位 2</option>
+                  </select>
+                  <select
+                    className="cell-select"
+                    style={{ height: 22, fontSize: 10, background: "var(--bg-panel-2)", border: "1px solid var(--line-2)", borderRadius: 4 }}
+                    value={connection.flowControl}
+                    onChange={(e) => setSerialParam({ flowControl: e.target.value as "none" | "hardware" | "software" })}
+                  >
+                    <option value="none">无流控</option>
+                    <option value="hardware">硬件流控</option>
+                    <option value="software">软件流控</option>
+                  </select>
+                </div>
+                <div style={{ fontSize: 9, color: "var(--t4)", padding: "0 10px 6px" }}>
+                  当前：{connection.frame} · 参数自动记忆
+                </div>
+              </div>
+            </>
+          )}
+        </div>
       </div>
 
       <div className="topbar-mid">
-        <div className="counter">
+        <div className="counter" title="已接收字节数">
           <Icon cp={IC.arrowRight} size={13} color="var(--green)" />
           <span className="counter-label">RX</span>
           <span className="counter-value">{fmt(rxCount)}</span>
         </div>
-        <div className="counter">
+        <div className="counter" title="已发送字节数">
           <Icon cp={IC.arrowLeft} size={13} color="var(--cyan)" />
           <span className="counter-label">TX</span>
           <span className="counter-value">{fmt(txCount)}</span>
         </div>
+        <button
+          className="icon-btn"
+          style={{ width: 20, height: 20, padding: 0 }}
+          onClick={() => useStore.getState().resetCounters()}
+          title="重置 RX/TX 计数器为 0"
+        >
+          <Icon cp={IC.refresh} size={10} color="var(--t4)" />
+        </button>
         <Sparkline />
         <span className="rate">{frameRate} 帧/s</span>
       </div>
@@ -423,24 +416,14 @@ export function Sidebar() {
   });
   const dropCls = (id: string) => (overId === id ? " drag-over" : "");
 
-  /** 右键「上移/下移」：找同父邻居再 moveNode，不依赖拖拽 */
-  const shift = (kind: "subProduct" | "role" | "case" | "protocol", id: string, dir: -1 | 1) => {
+  /** 右键「上移/下移」：找邻居再 moveNode */
+  const shift = (kind: "case" | "protocol", id: string, dir: -1 | 1) => {
     const s = useStore.getState();
-    const listOf = () => {
-      if (kind === "subProduct") return s.subProducts;
-      if (kind === "role") return s.roles;
-      if (kind === "case") return s.cases;
-      return s.protocols;
-    };
-    const parentOf = (x: { subProductId?: string }) => x.subProductId ?? "";
-    const all = listOf() as { id: string; subProductId?: string }[];
-    const cur = all.find((x) => x.id === id);
-    if (!cur) return;
-    const siblings = all.filter((x) => parentOf(x) === parentOf(cur));
-    const i = siblings.findIndex((x) => x.id === id);
+    const all = kind === "case" ? s.cases : s.protocols;
+    const i = all.findIndex((x) => x.id === id);
     const j = i + dir;
-    if (i < 0 || j < 0 || j >= siblings.length) return;
-    moveNode(kind, id, siblings[j].id);
+    if (i < 0 || j < 0 || j >= all.length) return;
+    moveNode(kind, id, all[j].id);
   };
   const toggle = (k: string) => setCollapsed((c) => ({ ...c, [k]: !c[k] }));
   const isCollapsed = (k: string) => !!collapsed[k];
@@ -450,40 +433,6 @@ export function Sidebar() {
     e.stopPropagation();
     setCtx({ x: e.clientX, y: e.clientY, items });
   };
-
-  const active = products.find((p) => p.id === activeProductId) ?? products[0];
-
-  const groupRow = (
-    key: string,
-    icon: string,
-    label: string,
-    count: number,
-    onAdd: () => void,
-    extra?: React.ReactNode,
-  ) => (
-    <div
-      className="tree-group indent-2"
-      onClick={() => toggle(key)}
-      onContextMenu={(e) => openCtx(e, [{ label: `新建${label}`, onClick: onAdd }])}
-    >
-      <Icon cp={IC.chevronDown} size={12} color="var(--t3)" style={{ transform: isCollapsed(key) ? "rotate(-90deg)" : "none" }} />
-      <Icon cp={icon} size={12} color="var(--t2)" />
-      <span className="label">{label}</span>
-      <span className="tree-count">{count}</span>
-      {extra}
-      <span className="spacer" />
-      <button
-        className="tree-add"
-        title={`新建${label}`}
-        onClick={(e) => {
-          e.stopPropagation();
-          onAdd();
-        }}
-      >
-        <Icon cp={IC.plus} size={11} color="var(--t4)" />
-      </button>
-    </div>
-  );
 
   const actionBtn = (items: CtxItem[]) => (
     <button
@@ -501,19 +450,14 @@ export function Sidebar() {
   return (
     <aside className="sidebar">
       <div className="sidebar-head">
-        <span className="sidebar-title">产品结构</span>
+        <span className="sidebar-title">串口自动化工作空间</span>
         <button
           className="add-btn"
           title="新建"
           onClick={(e) =>
             openCtx(e, [
-              { label: "新建产品", onClick: () => void import("../lib/actions").then((m) => m.newProduct()) },
-              { label: "新建子产品", onClick: () => void import("../lib/actions").then((m) => m.newSubProduct()) },
-              { label: "新建协议", onClick: () => void import("../lib/actions").then((m) => m.newProtocol()) },
-              { label: "新建角色", onClick: () => void import("../lib/actions").then((m) => m.newRole()) },
-              { label: "新建用例", onClick: () => void import("../lib/actions").then((m) => m.newCase()) },
-              { label: "新建规则", onClick: () => void import("../lib/actions").then((m) => m.newRule()) },
-              { label: "新建套件", onClick: () => void import("../lib/actions").then((m) => m.newSuite()) },
+              { label: "新建通信协议", onClick: () => void import("../lib/actions").then((m) => m.newProtocol()) },
+              { label: "新建自动化用例", onClick: () => void import("../lib/actions").then((m) => m.newCase()) },
             ])
           }
         >
@@ -521,227 +465,163 @@ export function Sidebar() {
         </button>
       </div>
 
-      <div className="tree">
-        {/* 产品根节点 */}
-        <div
-          className="tree-group"
-          onClick={() => toggle("root")}
-          onContextMenu={(e) =>
-            openCtx(e, [
-              { label: "新建子产品", onClick: () => void import("../lib/actions").then((m) => m.newSubProduct()) },
-              { label: "重命名产品", onClick: () => active && void import("../lib/actions").then((m) => m.renameProduct(active)) },
-              { label: "删除产品", danger: true, onClick: () => active && void import("../lib/actions").then((m) => m.deleteProduct(active)) },
-            ])
-          }
-        >
-          <Icon cp={IC.chevronDown} size={13} color="var(--t3)" style={{ transform: isCollapsed("root") ? "rotate(-90deg)" : "none" }} />
-          <Icon cp={IC.product} size={13} color="var(--accent)" />
-          <span className="label" style={{ fontWeight: 600 }}>
-            {active?.name ?? "未命名产品"}
-          </span>
-          <span className="tree-count">{subProducts.length}</span>
+      <div className="tree" style={{ padding: "6px 0" }}>
+        {/* 1. 通信协议列表 */}
+        <div className="tree-group" onClick={() => toggle("protocols")}>
+          <Icon cp={IC.chevronDown} size={12} color="var(--t3)" style={{ transform: isCollapsed("protocols") ? "rotate(-90deg)" : "none" }} />
+          <Icon cp={IC.protocol} size={13} color="var(--accent)" />
+          <span className="label" style={{ fontWeight: 600 }}>通信协议</span>
+          <span className="tree-count">{protocols.length}</span>
           <span className="spacer" />
-          {actionBtn([
-            { label: "新建子产品", onClick: () => void import("../lib/actions").then((m) => m.newSubProduct()) },
-            { label: "重命名产品", onClick: () => active && void import("../lib/actions").then((m) => m.renameProduct(active)) },
-            { label: "删除产品", danger: true, onClick: () => active && void import("../lib/actions").then((m) => m.deleteProduct(active)) },
-          ])}
+          <button
+            className="tree-add"
+            title="新建通信协议"
+            onClick={(e) => {
+              e.stopPropagation();
+              void import("../lib/actions").then((m) => m.newProtocol());
+            }}
+          >
+            <Icon cp={IC.plus} size={11} color="var(--t4)" />
+          </button>
         </div>
 
-        {!isCollapsed("root") && (
+        {!isCollapsed("protocols") && (
           <div className="tree-children">
-            {subProducts.length === 0 && (
-              <div className="tree-empty" onClick={() => void import("../lib/actions").then((m) => m.newSubProduct())}>
-                还没有子产品 —— 点这里新建
+            {protocols.length === 0 && (
+              <div
+                className="tree-empty"
+                onClick={() => void import("../lib/actions").then((m) => m.newProtocol())}
+              >
+                + 点此添加通信协议
               </div>
             )}
+            {protocols.map((pr) => (
+              <div
+                key={pr.id}
+                className={`tree-item indent-1${pr.id === activeProtocolId && activeView === "protocol" ? " active" : ""}${dropCls(pr.id)}`}
+                {...dnd("protocol", pr.id)}
+                onClick={() => {
+                  setActiveProtocol(pr.id);
+                  setView("protocol");
+                }}
+                onContextMenu={(e) =>
+                  openCtx(e, [
+                    { label: "在终端发送", onClick: () => { setActiveProtocol(pr.id); void useStore.getState().sendProtocol(pr.id); } },
+                    { label: "重命名协议", onClick: () => void import("../lib/actions").then((m) => m.renameProtocol(pr.id, pr.name)) },
+                    { label: "复制协议", onClick: () => { setActiveProtocol(pr.id); useStore.getState().duplicateProtocol(); } },
+                    { label: "上移", onClick: () => shift("protocol", pr.id, -1) },
+                    { label: "下移", onClick: () => shift("protocol", pr.id, 1) },
+                    { label: "删除协议", danger: true, onClick: () => void import("../lib/actions").then((m) => m.deleteProtocol(pr.id, pr.name)) },
+                  ])
+                }
+              >
+                <Icon cp={IC.protocolDoc} size={12} color={pr.id === activeProtocolId && activeView === "protocol" ? "var(--accent)" : "var(--t4)"} />
+                <span className="label">{pr.name}</span>
+                <span className="tag-mini">{pr.messages[0]?.fields.length ?? 0} 字段</span>
+                <span className="spacer" />
+                <button
+                  className="tree-add tree-send"
+                  title="直接在终端发送此协议数据帧"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setActiveProtocol(pr.id);
+                    void useStore.getState().sendProtocol(pr.id);
+                  }}
+                >
+                  <Icon cp={IC.arrowLeft} size={11} color="var(--green)" />
+                </button>
+                {actionBtn([
+                  { label: "在终端发送", onClick: () => { setActiveProtocol(pr.id); void useStore.getState().sendProtocol(pr.id); } },
+                  { label: "重命名协议", onClick: () => void import("../lib/actions").then((m) => m.renameProtocol(pr.id, pr.name)) },
+                  { label: "复制协议", onClick: () => { setActiveProtocol(pr.id); useStore.getState().duplicateProtocol(); } },
+                  { label: "上移", onClick: () => shift("protocol", pr.id, -1) },
+                  { label: "下移", onClick: () => shift("protocol", pr.id, 1) },
+                  { label: "删除协议", danger: true, onClick: () => void import("../lib/actions").then((m) => m.deleteProtocol(pr.id, pr.name)) },
+                ])}
+              </div>
+            ))}
+          </div>
+        )}
 
-            {subProducts.map((sp) => {
-              const spRoles = roles.filter((r) => r.subProductId === sp.id);
-              const spCases = cases.filter((c) => c.subProductId === sp.id);
-              const spProtocols = protocols.filter((p) => (p.subProductId ?? "") === sp.id);
-              const key = `sp:${sp.id}`;
-              const isActiveSp = sp.id === activeSubProductId;
-              return (
-                <div key={sp.id}>
-                  <div
-                    className={`tree-group indent-1${isActiveSp ? " sp-active" : ""}${dropCls(sp.id)}`}
-                    {...dnd("subProduct", sp.id)}
-                    onClick={() => {
-                      setActiveSubProduct(sp.id);
-                      toggle(key);
-                    }}
-                    onContextMenu={(e) =>
-                      openCtx(e, [
-                        { label: "重命名子产品", onClick: () => void import("../lib/actions").then((m) => m.renameSubProduct(sp)) },
-                        { label: "更换协议", onClick: () => void import("../lib/actions").then((m) => m.pickSubProductProtocol(sp)) },
-                        { label: "上移", onClick: () => shift("subProduct", sp.id, -1) },
-                        { label: "下移", onClick: () => shift("subProduct", sp.id, 1) },
-                        { label: "复制子产品", onClick: () => useStore.getState().duplicateSubProduct(sp.id) },
-                        { label: "新建角色", onClick: () => { setActiveSubProduct(sp.id); void import("../lib/actions").then((m) => m.newRole()); } },
-                        { label: "新建用例", onClick: () => { setActiveSubProduct(sp.id); void import("../lib/actions").then((m) => m.newCase()); } },
-                        { label: "删除子产品", danger: true, onClick: () => void import("../lib/actions").then((m) => m.deleteSubProduct(sp)) },
-                      ])
-                    }
-                  >
-                    <Icon cp={IC.chevronDown} size={12} color="var(--t3)" style={{ transform: isCollapsed(key) ? "rotate(-90deg)" : "none" }} />
-                    <Icon cp={IC.product} size={12} color={isActiveSp ? "var(--accent)" : "var(--t2)"} />
-                    <span className="label">{sp.name}</span>
-                    <span className="tag-mini">{spProtocols.length} 协议</span>
-                    <span className="spacer" />
-                    {actionBtn([
-                      { label: "重命名子产品", onClick: () => void import("../lib/actions").then((m) => m.renameSubProduct(sp)) },
-                      { label: "更换协议", onClick: () => void import("../lib/actions").then((m) => m.pickSubProductProtocol(sp)) },
-                      { label: "删除子产品", danger: true, onClick: () => void import("../lib/actions").then((m) => m.deleteSubProduct(sp)) },
-                    ])}
-                  </div>
+        {/* 2. 自动化测试列表 */}
+        <div className="tree-group" style={{ marginTop: 10 }} onClick={() => toggle("cases")}>
+          <Icon cp={IC.chevronDown} size={12} color="var(--t3)" style={{ transform: isCollapsed("cases") ? "rotate(-90deg)" : "none" }} />
+          <Icon cp={IC.case} size={13} color="var(--green)" />
+          <span className="label" style={{ fontWeight: 600 }}>自动化测试</span>
+          <span className="tree-count">{cases.length}</span>
+          <span className="spacer" />
+          <button
+            className="tree-add"
+            title="新建自动化用例"
+            onClick={(e) => {
+              e.stopPropagation();
+              void import("../lib/actions").then((m) => m.newCase());
+            }}
+          >
+            <Icon cp={IC.plus} size={11} color="var(--t4)" />
+          </button>
+        </div>
 
-                  {!isCollapsed(key) && (
-                    <div className="tree-children">
-                      {/* 协议：一个子产品可以有多个（心跳 / 上线 / 查询…） */}
-                      {groupRow(`protocols:${sp.id}`, IC.protocol, "协议", spProtocols.length, () => {
-                        setActiveSubProduct(sp.id);
-                        void import("../lib/actions").then((m) => m.newProtocol());
-                      })}
-                      {!isCollapsed(`protocols:${sp.id}`) &&
-                        spProtocols.map((pr) => (
-                          <div
-                            key={pr.id}
-                            className={`tree-item indent-3${pr.id === activeProtocolId && activeView === "protocol" ? " active" : ""}${dropCls(pr.id)}`}
-                            {...dnd("protocol", pr.id)}
-                            onClick={() => {
-                              setActiveSubProduct(sp.id);
-                              setActiveProtocol(pr.id);
-                              setView("protocol");
-                            }}
-                            onContextMenu={(e) =>
-                              openCtx(e, [
-                                { label: "上移", onClick: () => shift("protocol", pr.id, -1) },
-                                { label: "下移", onClick: () => shift("protocol", pr.id, 1) },
-                                { label: "发送这个协议", onClick: () => { setActiveProtocol(pr.id); void useStore.getState().sendProtocol(pr.id); } },
-                                { label: "重命名协议", onClick: () => void import("../lib/actions").then((m) => m.renameProtocol(pr.id, pr.name)) },
-                                { label: "复制协议", onClick: () => { setActiveProtocol(pr.id); useStore.getState().duplicateProtocol(); } },
-                                { label: "删除协议", danger: true, onClick: () => void import("../lib/actions").then((m) => m.deleteProtocol(pr.id, pr.name)) },
-                              ])
-                            }
-                          >
-                            <Icon cp={IC.protocolDoc} size={11} color="var(--t5)" />
-                            <span className="label">{pr.name}</span>
-                            <span className="tag-mini">{pr.version}</span>
-                            <span className="spacer" />
-                            <button
-                              className="tree-add tree-send"
-                              title="直接发送这个协议（用字段默认值组包）"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setActiveSubProduct(sp.id);
-                                setActiveProtocol(pr.id);
-                                void useStore.getState().sendProtocol(pr.id);
-                              }}
-                            >
-                              <Icon cp={IC.arrowLeft} size={11} color="var(--green)" />
-                            </button>
-                            {actionBtn([
-                              { label: "上移", onClick: () => shift("protocol", pr.id, -1) },
-                              { label: "下移", onClick: () => shift("protocol", pr.id, 1) },
-                              { label: "发送这个协议", onClick: () => { setActiveProtocol(pr.id); void useStore.getState().sendProtocol(pr.id); } },
-                              { label: "复制协议", onClick: () => { setActiveProtocol(pr.id); useStore.getState().duplicateProtocol(); } },
-                              { label: "重命名协议", onClick: () => void import("../lib/actions").then((m) => m.renameProtocol(pr.id, pr.name)) },
-                              { label: "删除协议", danger: true, onClick: () => void import("../lib/actions").then((m) => m.deleteProtocol(pr.id, pr.name)) },
-                            ])}
-                          </div>
-                        ))}
-
-                      {/* 角色 */}
-                      {groupRow(
-                        `roles:${sp.id}`,
-                        IC.link,
-                        "角色",
-                        spRoles.length,
-                        () => {
-                          setActiveSubProduct(sp.id);
-                          void import("../lib/actions").then((m) => m.newRole());
-                        },
-                      )}
-                      {!isCollapsed(`roles:${sp.id}`) &&
-                        spRoles.map((r) => (
-                          <div
-                            key={r.id}
-                            className={`tree-item indent-3${r.id === activeRoleId ? " active" : ""}${dropCls(r.id)}`}
-                            {...dnd("role", r.id)}
-                            onClick={() => {
-                              setActiveRole(r.id);
-                              setActiveSubProduct(sp.id);
-                              void import("../lib/actions").then((m) => m.editRole(r));
-                            }}
-                            onContextMenu={(e) =>
-                              openCtx(e, [
-                                { label: "上移", onClick: () => shift("role", r.id, -1) },
-                                { label: "下移", onClick: () => shift("role", r.id, 1) },
-                                { label: "编辑角色", onClick: () => void import("../lib/actions").then((m) => m.editRole(r)) },
-                                { label: "复制角色", onClick: () => useStore.getState().duplicateRole(r.id) },
-                                { label: "删除角色", danger: true, onClick: () => void import("../lib/actions").then((m) => m.deleteRole(r)) },
-                              ])
-                            }
-                          >
-                            <Icon cp={IC.link} size={11} color="var(--t4)" />
-                            <span className="label">{r.name}</span>
-                            <span className="tag-mini">站 {r.address}</span>
-                            <span className="spacer" />
-                            {actionBtn([
-                              { label: "上移", onClick: () => shift("role", r.id, -1) },
-                              { label: "下移", onClick: () => shift("role", r.id, 1) },
-                              { label: "编辑角色", onClick: () => void import("../lib/actions").then((m) => m.editRole(r)) },
-                              { label: "复制角色", onClick: () => useStore.getState().duplicateRole(r.id) },
-                              { label: "删除角色", danger: true, onClick: () => void import("../lib/actions").then((m) => m.deleteRole(r)) },
-                            ])}
-                          </div>
-                        ))}
-
-
-
-                      {/* 用例 */}
-                      {groupRow(`cases:${sp.id}`, IC.case, "用例", spCases.length, () => {
-                        setActiveSubProduct(sp.id);
-                        void import("../lib/actions").then((m) => m.newCase());
-                      })}
-                      {!isCollapsed(`cases:${sp.id}`) &&
-                        spCases.map((c) => (
-                          <div
-                            key={c.id}
-                            className={`tree-item indent-3${c.id === activeCaseId && activeView === "case" ? " active" : ""}${dropCls(c.id)}`}
-                            {...dnd("case", c.id)}
-                            onClick={() => {
-                              setActiveCase(c.id);
-                              setActiveSubProduct(sp.id);
-                              setView("case");
-                            }}
-                            onContextMenu={(e) =>
-                              openCtx(e, [
-                                { label: "运行用例", onClick: () => { setActiveCase(c.id); void useStore.getState().runActiveCase(); } },
-                                { label: "重命名用例", onClick: () => void import("../lib/actions").then((m) => m.renameCase(c)) },
-                                { label: "上移", onClick: () => shift("case", c.id, -1) },
-                                { label: "下移", onClick: () => shift("case", c.id, 1) },
-                                { label: "复制用例", onClick: () => useStore.getState().duplicateCase(c.id) },
-                                { label: "删除用例", danger: true, onClick: () => void import("../lib/actions").then((m) => m.deleteCase(c)) },
-                              ])
-                            }
-                          >
-                            <span className="label">{c.name}</span>
-                            {c.dataDriven && <span className="tag-mini">CSV</span>}
-                            <span className="spacer" />
-                            {actionBtn([
-                              { label: "运行用例", onClick: () => { setActiveCase(c.id); void useStore.getState().runActiveCase(); } },
-                              { label: "删除用例", danger: true, onClick: () => void import("../lib/actions").then((m) => m.deleteCase(c)) },
-                            ])}
-                          </div>
-                        ))}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-
+        {!isCollapsed("cases") && (
+          <div className="tree-children">
+            {cases.length === 0 && (
+              <div
+                className="tree-empty"
+                onClick={() => void import("../lib/actions").then((m) => m.newCase())}
+              >
+                + 点此新建第一个自动化用例
+              </div>
+            )}
+            {cases.map((c) => (
+              <div
+                key={c.id}
+                className={`tree-item indent-1${c.id === activeCaseId && activeView === "case" ? " active" : ""}${dropCls(c.id)}`}
+                {...dnd("case", c.id)}
+                onClick={() => {
+                  setActiveCase(c.id);
+                  setView("case");
+                }}
+                onContextMenu={(e) =>
+                  openCtx(e, [
+                    { label: "运行用例", onClick: () => { setActiveCase(c.id); void useStore.getState().runActiveCase(); } },
+                    { label: "重命名用例", onClick: () => void import("../lib/actions").then((m) => m.renameCase(c)) },
+                    { label: "复制用例", onClick: () => useStore.getState().duplicateCase(c.id) },
+                    { label: "上移", onClick: () => shift("case", c.id, -1) },
+                    { label: "下移", onClick: () => shift("case", c.id, 1) },
+                    { label: "删除用例", danger: true, onClick: () => void import("../lib/actions").then((m) => m.deleteCase(c)) },
+                  ])
+                }
+              >
+                <Icon
+                  cp={c.status === "passed" ? IC.check : c.status === "failed" ? IC.error : IC.case}
+                  size={12}
+                  color={c.status === "passed" ? "var(--green)" : c.status === "failed" ? "var(--red)" : "var(--t4)"}
+                />
+                <span className="label">{c.name}</span>
+                <span className="tag-mini">{c.actions?.length ?? 1} 任务</span>
+                <span className="spacer" />
+                <button
+                  className="tree-add tree-send"
+                  title="运行这个自动化用例"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setActiveCase(c.id);
+                    setView("case");
+                    void useStore.getState().runActiveCase();
+                  }}
+                >
+                  <Icon cp={IC.play} size={10} color="var(--green)" />
+                </button>
+                {actionBtn([
+                  { label: "运行用例", onClick: () => { setActiveCase(c.id); void useStore.getState().runActiveCase(); } },
+                  { label: "重命名用例", onClick: () => void import("../lib/actions").then((m) => m.renameCase(c)) },
+                  { label: "复制用例", onClick: () => useStore.getState().duplicateCase(c.id) },
+                  { label: "上移", onClick: () => shift("case", c.id, -1) },
+                  { label: "下移", onClick: () => shift("case", c.id, 1) },
+                  { label: "删除用例", danger: true, onClick: () => void import("../lib/actions").then((m) => m.deleteCase(c)) },
+                ])}
+              </div>
+            ))}
           </div>
         )}
       </div>

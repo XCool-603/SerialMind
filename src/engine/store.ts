@@ -1200,7 +1200,6 @@ export const useStore = create<State>((set, get) => {
             ? { ...c, status: r.status === "pass" ? "passed" : "failed", statusText: `${r.status === "pass" ? "上次通过" : "上次失败"} · ${r.startedAt.slice(0, 5)}` }
             : c,
         ),
-        activeView: "report",
         serialMsg: `用例「${item.name}」${r.status === "pass" ? "通过" : "失败"} · ${r.durationMs}ms`,
       }));
     },

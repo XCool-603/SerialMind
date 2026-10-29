@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { encodeMessage } from "../engine/codec";
 import { toHex } from "../engine/bytes";
 import { useStore } from "../engine/store";
@@ -58,15 +58,38 @@ export function CasePage() {
     updateCase,
     runActiveCase,
     running,
+    liveSteps,
     runs,
     requestStop,
     clearRuns,
+    connection,
   } = useStore();
 
   const [query, setQuery] = useState("");
   const [tagFilter, setTagFilter] = useState("全部");
+  const liveStreamEndRef = useRef<HTMLDivElement | null>(null);
 
   const active = cases.find((c) => c.id === activeCaseId) ?? cases[0];
+
+  useEffect(() => {
+    if (running && liveStreamEndRef.current) {
+      liveStreamEndRef.current.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [liveSteps.length, running]);
+
+  const handleRunClick = () => {
+    if (running) {
+      requestStop();
+      return;
+    }
+    if (!connection.connected) {
+      const ok = window.confirm(
+        `【提示】当前串口未打开！\n\n点击「确定」将以本地模拟模式执行（在软件中自动计算步长和验证，但不向硬件写入）。\n如需发送到实际硬件，请先在顶栏点击「打开串口」。`,
+      );
+      if (!ok) return;
+    }
+    void runActiveCase();
+  };
 
   // 过滤后的用例列表
   const filtered = useMemo(() => {
@@ -276,7 +299,7 @@ export function CasePage() {
                   background: running ? "var(--red)" : "var(--green)",
                   borderColor: running ? "var(--red)" : "var(--green)",
                 }}
-                onClick={() => (running ? requestStop() : void runActiveCase())}
+                onClick={handleRunClick}
               >
                 <Icon cp={running ? IC.close : IC.play} size={13} color="#fff" />
                 <span>{running ? "停止执行" : "▶ 运行用例"}</span>
@@ -285,7 +308,7 @@ export function CasePage() {
           </div>
 
           {/* 全局循环与周期控制栏 */}
-          <div style={{ display: "flex", alignItems: "center", gap: 14, padding: "8px 14px", background: "var(--bg-panel-2)", border: "1px solid var(--line-2)", borderRadius: 8, marginBottom: 16 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 14, padding: "8px 14px", background: "var(--bg-panel-2)", border: "1px solid var(--line-2)", borderRadius: 8, marginBottom: 14 }}>
             <span style={{ fontSize: 12, fontWeight: 600, color: "var(--t1)" }}>自动化循环设置：</span>
             <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "var(--t2)" }}>
               <span>下发周期:</span>
@@ -318,6 +341,144 @@ export function CasePage() {
               <span>断言失败立即停止</span>
             </label>
           </div>
+
+          {/* 实时执行监控控制台（Apifox Runner 核心体验：发包流水、数值自增实时可见） */}
+          {(running || liveSteps.length > 0 || (lastRun && lastRun.items.length > 0)) && (
+            <div
+              style={{
+                marginBottom: 16,
+                background: "var(--bg-panel-1)",
+                border: running ? "1px solid var(--accent)" : "1px solid var(--line-2)",
+                borderRadius: 8,
+                overflow: "hidden",
+                boxShadow: running ? "0 0 12px rgba(88, 166, 255, 0.2)" : "none",
+              }}
+            >
+              {/* 控制台顶栏 */}
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  padding: "8px 12px",
+                  background: running ? "rgba(88, 166, 255, 0.1)" : "var(--bg-panel-2)",
+                  borderBottom: "1px solid var(--line-2)",
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  {running ? (
+                    <span className="dot on" style={{ background: "var(--green)", width: 8, height: 8 }} />
+                  ) : lastRun?.status === "pass" ? (
+                    <Icon cp={IC.check} size={13} color="var(--green)" />
+                  ) : (
+                    <Icon cp={IC.error} size={13} color="var(--red)" />
+                  )}
+                  <span style={{ fontSize: 12, fontWeight: 600, color: "var(--t1)" }}>
+                    {running
+                      ? "自动化测试正在运行中…"
+                      : lastRun?.status === "pass"
+                        ? "本轮自动化测试已完成（全部通过）"
+                        : `本轮测试结束（${lastRun?.reason || "有断言失败"}）`}
+                  </span>
+                  <span className="tag-mini">
+                    {running
+                      ? `已执行 ${liveSteps.length} 次下发`
+                      : `共 ${lastRun?.items.length ?? liveSteps.length} 步 · 耗时 ${lastRun?.durationMs ?? 0}ms`}
+                  </span>
+                  {!connection.connected ? (
+                    <span className="pill amber" style={{ fontSize: 9 }}>
+                      本地模拟模式 (串口未打开)
+                    </span>
+                  ) : (
+                    <span className="pill green" style={{ fontSize: 9 }}>
+                      真实串口下发中 ({connection.port})
+                    </span>
+                  )}
+                </div>
+
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  {running ? (
+                    <button
+                      className="btn sm"
+                      style={{ background: "var(--red)", borderColor: "var(--red)", color: "#fff", fontWeight: 600, height: 24, padding: "0 10px" }}
+                      onClick={() => requestStop()}
+                    >
+                      ■ 停止运行
+                    </button>
+                  ) : (
+                    <button
+                      className="btn sm"
+                      style={{ height: 24, fontSize: 10, padding: "0 8px" }}
+                      onClick={() => useStore.setState({ liveSteps: [] })}
+                      title="清空流水日志"
+                    >
+                      清空流水
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* 实时流水列表 */}
+              <div
+                style={{
+                  maxHeight: 220,
+                  overflowY: "auto",
+                  padding: "6px 10px",
+                  fontSize: 11,
+                  fontFamily: "var(--font-mono, monospace)",
+                  background: "var(--bg-main)",
+                }}
+              >
+                {(running || liveSteps.length > 0 ? liveSteps : lastRun?.items ?? []).map((step, idx) => (
+                  <div
+                    key={step.stepId || idx}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                      padding: "4px 0",
+                      borderBottom: "1px solid var(--line-3)",
+                      lineHeight: "1.5",
+                    }}
+                  >
+                    <span style={{ color: "var(--t4)", fontSize: 10, width: 55 }}>{step.startedAt}</span>
+                    <span style={{ fontWeight: 600, color: "var(--t1)", width: 140, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {step.text}
+                    </span>
+                    <span
+                      style={{
+                        padding: "1px 6px",
+                        borderRadius: 3,
+                        background: "var(--bg-panel-2)",
+                        color: "var(--accent)",
+                        fontSize: 11,
+                        fontWeight: 600,
+                        letterSpacing: "0.5px",
+                      }}
+                    >
+                      {step.frameHex || "—"}
+                    </span>
+                    <span style={{ color: "var(--green)", fontSize: 11, marginLeft: 4, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {step.expected || ""}
+                    </span>
+                    <span
+                      style={{
+                        color: step.status === "pass" ? "var(--green)" : "var(--red)",
+                        fontSize: 10,
+                        fontWeight: 600,
+                        padding: "1px 6px",
+                        borderRadius: 3,
+                        background: step.status === "pass" ? "rgba(34, 197, 94, 0.15)" : "rgba(239, 68, 68, 0.15)",
+                      }}
+                    >
+                      {step.status === "pass" ? "成功" : "失败"}
+                    </span>
+                  </div>
+                ))}
+                <div ref={liveStreamEndRef} />
+              </div>
+            </div>
+          )}
 
           {/* 协议任务列表 (免代码图形化卡片，从我添加的协议中选) */}
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12, marginTop: 12 }}>

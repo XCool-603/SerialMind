@@ -747,17 +747,19 @@ async function runOnce(
           .filter((f) => f.type !== "crc" && f.offset >= 0)
           .map((f) => `${f.name}=${values[f.name]}`)
           .join(", ");
-        items.push({
+        const stepRes: StepResult = {
           stepId: `${act.id}_r${r}`,
           kind: "send",
           text: `${tag}下发「${proto.name}」`,
-          status: "pass",
+          status: failed ? "fail" : "pass",
           startedAt: nowTime(),
           durationMs: 0,
           expected: displayVals ? `字段: ${displayVals}` : "固定协议帧",
-          actual: `已发送 ${bytes.length} 字节 [${toHex(bytes)}]`,
+          actual: host.isLinkOpen() ? `已发送 ${bytes.length} 字节 [${toHex(bytes)}]` : `串口未连接(模拟) [${toHex(bytes)}]`,
           frameHex: toHex(bytes),
-        });
+        };
+        items.push(stepRes);
+        host.onStep?.(item.id, items.length - 1, stepRes);
       }
     }
 
