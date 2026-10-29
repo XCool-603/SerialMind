@@ -3,7 +3,7 @@ import { encodeMessage } from "../engine/codec";
 import { toHex } from "../engine/bytes";
 import { useStore } from "../engine/store";
 import type { CasePacketAction, CaseStep } from "../engine/types";
-import { HEARTBEAT_PROTOCOL, VEHICLE_WALK_PROTOCOL, type PdlProtocol } from "../engine/pdl";
+import type { PdlProtocol } from "../engine/pdl";
 import { Icon, IC } from "../components/Icon";
 import { EmptyState } from "../components/Empty";
 
@@ -114,7 +114,11 @@ export function CasePage() {
       void import("../lib/actions").then((m) => m.newProtocol());
       return;
     }
-    const targetProto = protoId ? protocols.find((p) => p.id === protoId) ?? protocols[0] : (protocols[actions.length % protocols.length] ?? protocols[0]);
+    const targetProto =
+      (protoId ? protocols.find((p) => p.id === protoId) : null) ??
+      protocols.find((p) => p.id === useStore.getState().activeProtocolId) ??
+      protocols[0];
+    if (!targetProto) return;
     const targetMsg = targetProto.messages[0];
 
     const newAct: CasePacketAction = {
@@ -127,54 +131,6 @@ export function CasePage() {
       fields: [], // 纯动态：默认 100% 动态读取 targetProto 的字段与默认值，无需存死字段快照！
     };
     saveActions([...actions, newAct]);
-  };
-
-  // 一键预设用户场景：从添加的协议中选「心跳协议」与「车辆行走协议」
-  const loadHeartbeatAndMovePreset = () => {
-    let heartbeatProto = protocols.find((p) => p.name.includes("心跳") || p.id === "proto-heartbeat");
-    let vehicleProto = protocols.find((p) => p.name.includes("行走") || p.name.includes("车辆") || p.id === "proto-vehicle-walk");
-
-    // 如果还没有这两个协议，自动补充到协议列表中供用户管理
-    const storeState = useStore.getState();
-    const newProtocols = [...protocols];
-    if (!heartbeatProto) {
-      heartbeatProto = { ...HEARTBEAT_PROTOCOL, productId: storeState.activeProductId, subProductId: storeState.activeSubProductId };
-      newProtocols.push(heartbeatProto);
-    }
-    if (!vehicleProto) {
-      vehicleProto = { ...VEHICLE_WALK_PROTOCOL, productId: storeState.activeProductId, subProductId: storeState.activeSubProductId };
-      newProtocols.push(vehicleProto);
-    }
-    if (newProtocols.length > protocols.length) {
-      useStore.setState({ protocols: newProtocols });
-    }
-
-    const hbMsg = heartbeatProto.messages[0];
-    const vmMsg = vehicleProto.messages[0];
-
-    const act1: CasePacketAction = {
-      id: `act_hb_${Date.now()}`,
-      name: "每秒发送心跳保活",
-      protocolId: heartbeatProto.id,
-      messageId: hbMsg?.id,
-      intervalMs: 1000,
-      enabled: true,
-      fields: [], // 动态读取心跳协议字段，步长默认为 0
-    };
-
-    // 车辆行走协议中，找到距离字段，设置步长 +10
-    const distFld = (vmMsg?.fields ?? []).find((f) => f.name.includes("distance") || f.name.includes("pos") || f.name.includes("dist"));
-    const act2: CasePacketAction = {
-      id: `act_move_${Date.now() + 1}`,
-      name: "每秒车辆行走+10米",
-      protocolId: vehicleProto.id,
-      messageId: vmMsg?.id,
-      intervalMs: 1000,
-      enabled: true,
-      fields: distFld ? [{ fieldName: distFld.name, step: 10 }] : [],
-    };
-
-    saveActions([act1, act2]);
   };
 
   // 断言步骤列表（可视化配置，不写代码）
@@ -363,30 +319,57 @@ export function CasePage() {
             </label>
           </div>
 
-          {/* 一键载入场景快捷提示栏 */}
-          <div className="quick-preset-banner">
-            <div>
-              <div className="title">心跳与行走场景一键配置</div>
-              <div className="desc">从您添加的协议中直接载入「心跳协议」与「车辆行走协议(+10米/秒)」，字段完全实时动态跟随协议最新定义。</div>
-            </div>
-            <button
-              className="btn-primary"
-              style={{ height: 26, padding: "0 12px", fontSize: 11 }}
-              onClick={loadHeartbeatAndMovePreset}
-            >
-              <Icon cp={IC.plus} size={11} color="#fff" />
-              <span>载入 心跳协议 + 行走协议(+10米) 场景</span>
-            </button>
-          </div>
-
           {/* 协议任务列表 (免代码图形化卡片，从我添加的协议中选) */}
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12, marginTop: 12 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
               <Icon cp={IC.protocol} size={15} color="var(--accent)" />
-              <span style={{ fontSize: 13, fontWeight: 600, color: "var(--t1)" }}>协议下发任务列表（每个任务直接关联您添加的协议）</span>
+              <span style={{ fontSize: 13, fontWeight: 600, color: "var(--t1)" }}>协议自动化下发任务</span>
               <span className="tag-mini">{actions.length} 个任务</span>
             </div>
+            {protocols.length > 0 && (
+              <button
+                className="btn-primary"
+                style={{ height: 26, padding: "0 10px", fontSize: 11 }}
+                onClick={() => handleAddAction()}
+                title="从我添加的协议中新增一个下发任务"
+              >
+                <Icon cp={IC.plus} size={11} color="#fff" />
+                <span>添加协议下发任务</span>
+              </button>
+            )}
           </div>
+
+          {actions.length === 0 && (
+            <div style={{ padding: "32px 20px", textAlign: "center", background: "var(--bg-panel-1)", border: "1px dashed var(--line-2)", borderRadius: 8, margin: "10px 0" }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: "var(--t1)", marginBottom: 6 }}>
+                当前用例还没有配置协议下发任务
+              </div>
+              <div style={{ fontSize: 11, color: "var(--t3)", marginBottom: 16 }}>
+                {protocols.length > 0
+                  ? "选择您已添加的通信协议，即可在界面中配置定时发送、每秒字段增量（例如行驶距离每秒+10米、心跳序号+1）。"
+                  : "当前系统中还没有任何通信协议，请先前往「协议」页新建您的通信协议。"}
+              </div>
+              {protocols.length > 0 ? (
+                <button
+                  className="btn-primary"
+                  style={{ height: 30, padding: "0 16px", fontSize: 12, margin: "0 auto", display: "inline-flex", alignItems: "center", gap: 6 }}
+                  onClick={() => handleAddAction()}
+                >
+                  <Icon cp={IC.plus} size={12} color="#fff" />
+                  <span>选择我的协议并添加任务</span>
+                </button>
+              ) : (
+                <button
+                  className="btn-primary"
+                  style={{ height: 30, padding: "0 16px", fontSize: 12, margin: "0 auto", display: "inline-flex", alignItems: "center", gap: 6 }}
+                  onClick={() => useStore.getState().setView("protocol")}
+                >
+                  <Icon cp={IC.protocolDoc} size={12} color="#fff" />
+                  <span>去「协议」页新建我的协议</span>
+                </button>
+              )}
+            </div>
+          )}
 
           {actions.map((act, actIdx) => {
             // 直接从用户添加的协议中查找对应的协议！
@@ -489,6 +472,8 @@ export function CasePage() {
                       {currentMsg?.fields
                         .filter((f) => f.type !== "crc" && f.offset >= 0)
                         .map((fld) => {
+                          const isFixed = Boolean(fld.hex);
+                          const isAuto = Boolean(fld.auto || fld.valueExpr);
                           const rule = (act.fields ?? []).find((r) => r.fieldName === fld.name);
                           // 协议当前最新默认值
                           const protoDefault = Number(fld.value ?? 0);
@@ -499,24 +484,28 @@ export function CasePage() {
 
                           const updateFieldInit = (newInit: number) => {
                             const rest = (act.fields ?? []).filter((r) => r.fieldName !== fld.name);
-                            rest.push({
-                              fieldName: fld.name,
-                              customInit: newInit,
-                              initValue: newInit,
-                              step: stepVal,
-                            });
+                            if (newInit !== protoDefault || stepVal !== 0) {
+                              rest.push({
+                                fieldName: fld.name,
+                                customInit: newInit === protoDefault ? undefined : newInit,
+                                initValue: newInit,
+                                step: stepVal,
+                              });
+                            }
                             const next = actions.map((a, i) => (i === actIdx ? { ...a, fields: rest } : a));
                             saveActions(next);
                           };
 
                           const updateFieldStep = (newStep: number) => {
                             const rest = (act.fields ?? []).filter((r) => r.fieldName !== fld.name);
-                            rest.push({
-                              fieldName: fld.name,
-                              customInit: rule?.customInit,
-                              initValue: initVal,
-                              step: newStep,
-                            });
+                            if (newStep !== 0 || isCustom) {
+                              rest.push({
+                                fieldName: fld.name,
+                                customInit: rule?.customInit,
+                                initValue: initVal,
+                                step: newStep,
+                              });
+                            }
                             const next = actions.map((a, i) => (i === actIdx ? { ...a, fields: rest } : a));
                             saveActions(next);
                           };
@@ -530,6 +519,16 @@ export function CasePage() {
                             saveActions(next);
                           };
 
+                          const displayProtoDefault = fld.hex
+                            ? fld.hex
+                            : fld.auto
+                              ? "整帧长度"
+                              : fld.valueExpr
+                                ? fld.valueExpr
+                                : fld.valueFormat === "hex"
+                                  ? `0x${protoDefault.toString(16).toUpperCase()}`
+                                  : String(protoDefault);
+
                           return (
                             <tr key={fld.id}>
                               <td>
@@ -538,58 +537,82 @@ export function CasePage() {
                                   <span style={{ fontSize: 9, color: "var(--t4)" }}>
                                     ({fld.size}B {fld.type}{fld.unit ? ` · ${fld.unit}` : ""})
                                   </span>
+                                  {isFixed && <span className="tag-mini" style={{ color: "var(--t4)" }}>固定内容</span>}
+                                  {isAuto && <span className="tag-mini" style={{ color: "var(--accent)" }}>协议自动算</span>}
                                 </div>
-                                <div style={{ fontSize: 9, color: "var(--t4)", display: "flex", alignItems: "center", gap: 6 }}>
+                                <div style={{ fontSize: 9, color: "var(--t4)", display: "flex", alignItems: "center", gap: 6, marginTop: 2 }}>
                                   {fld.desc && <span>{fld.desc} · </span>}
-                                  <span>协议默认: {protoDefault}</span>
+                                  <span>协议当前定义: {displayProtoDefault}</span>
                                 </div>
                               </td>
                               <td>
-                                <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                                  <input
-                                    type="number"
-                                    className="proto-input"
-                                    style={{ width: 80, borderColor: isCustom ? "var(--accent)" : "var(--line-2)" }}
-                                    value={initVal}
-                                    onChange={(e) => updateFieldInit(Number(e.target.value))}
-                                  />
-                                  {isCustom && (
-                                    <button
-                                      className="btn sm"
-                                      style={{ height: 20, fontSize: 9, padding: "0 4px", color: "var(--accent)" }}
-                                      onClick={resetToProtoDefault}
-                                      title="重置为协议定义的最新默认值"
-                                    >
-                                      跟随协议
-                                    </button>
-                                  )}
-                                </div>
+                                {isFixed ? (
+                                  <span style={{ fontSize: 11, fontFamily: "var(--font-mono, monospace)", color: "var(--t2)" }}>
+                                    {fld.hex}
+                                  </span>
+                                ) : isAuto ? (
+                                  <span style={{ fontSize: 10, color: "var(--t3)" }}>
+                                    {fld.auto ? "整帧长度 (自动)" : fld.valueExpr}
+                                  </span>
+                                ) : (
+                                  <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                                    <input
+                                      type="number"
+                                      className="proto-input"
+                                      style={{ width: 80, borderColor: isCustom ? "var(--accent)" : "var(--line-2)" }}
+                                      value={initVal}
+                                      onChange={(e) => updateFieldInit(Number(e.target.value))}
+                                    />
+                                    {isCustom && (
+                                      <button
+                                        className="btn sm"
+                                        style={{ height: 20, fontSize: 9, padding: "0 4px", color: "var(--accent)" }}
+                                        onClick={resetToProtoDefault}
+                                        title="重置为协议定义的最新默认值"
+                                      >
+                                        跟随协议
+                                      </button>
+                                    )}
+                                  </div>
+                                )}
                               </td>
                               <td>
-                                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                                  <input
-                                    type="number"
-                                    className="proto-input"
-                                    style={{ width: 75 }}
-                                    placeholder="0 (不变)"
-                                    value={stepVal}
-                                    onChange={(e) => updateFieldStep(Number(e.target.value))}
-                                  />
-                                  {stepVal === 0 ? (
-                                    <span style={{ fontSize: 10, color: "var(--t4)" }}>固定</span>
-                                  ) : (
-                                    <span style={{ fontSize: 10, color: stepVal > 0 ? "var(--green)" : "var(--amber)", fontWeight: 600 }}>
-                                      {stepVal > 0 ? `+${stepVal}/秒` : `${stepVal}/秒`}
-                                    </span>
-                                  )}
-                                </div>
+                                {isFixed || isAuto ? (
+                                  <span style={{ fontSize: 10, color: "var(--t4)" }}>协议自洽</span>
+                                ) : (
+                                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                                    <input
+                                      type="number"
+                                      className="proto-input"
+                                      style={{ width: 75 }}
+                                      placeholder="0 (不变)"
+                                      value={stepVal}
+                                      onChange={(e) => updateFieldStep(Number(e.target.value))}
+                                    />
+                                    {stepVal === 0 ? (
+                                      <span style={{ fontSize: 10, color: "var(--t4)" }}>固定</span>
+                                    ) : (
+                                      <span style={{ fontSize: 10, color: stepVal > 0 ? "var(--green)" : "var(--amber)", fontWeight: 600 }}>
+                                        {stepVal > 0 ? `+${stepVal}/秒` : `${stepVal}/秒`}
+                                      </span>
+                                    )}
+                                  </div>
+                                )}
                               </td>
                               <td style={{ fontSize: 11, fontFamily: "var(--font-mono, monospace)" }}>
-                                <span style={{ color: "var(--t1)" }}>{initVal}</span>
-                                <span style={{ margin: "0 4px", color: "var(--t4)" }}>→</span>
-                                <span style={{ color: "var(--accent)" }}>{initVal + stepVal}</span>
-                                <span style={{ margin: "0 4px", color: "var(--t4)" }}>→</span>
-                                <span style={{ color: "var(--accent)" }}>{initVal + stepVal * 2}</span>
+                                {isFixed ? (
+                                  <span style={{ color: "var(--t3)" }}>{fld.hex} (固定不变)</span>
+                                ) : isAuto ? (
+                                  <span style={{ color: "var(--t3)" }}>随帧长/计算式实时推导</span>
+                                ) : (
+                                  <>
+                                    <span style={{ color: "var(--t1)" }}>{initVal}</span>
+                                    <span style={{ margin: "0 4px", color: "var(--t4)" }}>→</span>
+                                    <span style={{ color: "var(--accent)" }}>{initVal + stepVal}</span>
+                                    <span style={{ margin: "0 4px", color: "var(--t4)" }}>→</span>
+                                    <span style={{ color: "var(--accent)" }}>{initVal + stepVal * 2}</span>
+                                  </>
+                                )}
                               </td>
                             </tr>
                           );

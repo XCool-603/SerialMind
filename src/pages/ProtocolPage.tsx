@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "../engine/store";
 import { Icon, IC } from "../components/Icon";
 import { EmptyState } from "../components/Empty";
@@ -159,10 +159,57 @@ export function ProtocolPage() {
     }
   }, [localProto, sample]);
 
+  const syncToStore = (
+    nextMessages: PdlMessage[],
+    nextFraming = framing,
+    nextGap = gapMs,
+    nextPrefix = prefix,
+    nextAlgo = algorithm,
+    nextSample = sampleHex,
+  ) => {
+    if (!active) return;
+    updateProtocol(active.id, {
+      messages: nextMessages,
+      framing: { ...active.framing, mode: nextFraming, gapMs: nextGap, prefix: nextPrefix.trim() || undefined },
+      checksum: { ...active.checksum, algorithm: nextAlgo },
+      sampleFrame: nextSample,
+    });
+  };
+
+  const activeRef = useRef(active);
+  activeRef.current = active;
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
+  const framingRef = useRef(framing);
+  framingRef.current = framing;
+  const gapMsRef = useRef(gapMs);
+  gapMsRef.current = gapMs;
+  const prefixRef = useRef(prefix);
+  prefixRef.current = prefix;
+  const algorithmRef = useRef(algorithm);
+  algorithmRef.current = algorithm;
+  const sampleHexRef = useRef(sampleHex);
+  sampleHexRef.current = sampleHex;
+
+  useEffect(() => {
+    return () => {
+      if (activeRef.current) {
+        useStore.getState().updateProtocol(activeRef.current.id, {
+          messages: messagesRef.current,
+          framing: { ...activeRef.current.framing, mode: framingRef.current, gapMs: gapMsRef.current, prefix: prefixRef.current.trim() || undefined },
+          checksum: { ...activeRef.current.checksum, algorithm: algorithmRef.current },
+          sampleFrame: sampleHexRef.current,
+        });
+      }
+    };
+  }, []);
+
   const patchFields = (next: PdlField[]) => {
     if (!msg) return;
-    setMessages((prev) => prev.map((m) => (m.id === msg.id ? { ...m, fields: next } : m)));
-    setDirty(true);
+    const nextMsgs = messages.map((m) => (m.id === msg.id ? { ...m, fields: next } : m));
+    setMessages(nextMsgs);
+    setDirty(false);
+    syncToStore(nextMsgs);
   };
 
   const updateField = (id: string, patch: Partial<PdlField>) => {
@@ -363,11 +410,13 @@ export function ProtocolPage() {
     }
     if (!out.length) return;
     const built: PdlMessage = { id: msg?.id ?? "frame", name: msg?.name ?? "报文", fields: recalc(out) };
-    setMessages((prev) => (prev.length ? prev.map((m) => (m.id === built.id ? built : m)) : [built]));
+    const nextMsgs = messages.length ? messages.map((m) => (m.id === built.id ? built : m)) : [built];
+    setMessages(nextMsgs);
     setMsgId(built.id);
     setSelectedId(built.fields[0].id);
     setSampleHex(builderSample);
-    setDirty(true);
+    setDirty(false);
+    syncToStore(nextMsgs, framing, gapMs, prefix, algorithm, builderSample);
     setBuilderOpen(false);
   };
 
@@ -379,9 +428,11 @@ export function ProtocolPage() {
       name: `报文${messages.length + 1}`,
       fields: (base?.fields ?? []).map((f) => (f.id === cmdField?.id ? { ...f, value: Number(f.value ?? 0) + 1 } : { ...f })),
     };
-    setMessages((prev) => [...prev, m]);
+    const nextMsgs = [...messages, m];
+    setMessages(nextMsgs);
     setMsgId(m.id);
-    setDirty(true);
+    setDirty(false);
+    syncToStore(nextMsgs);
   };
 
   const removeMessage = () => {
@@ -389,7 +440,8 @@ export function ProtocolPage() {
     const rest = messages.filter((m) => m.id !== msgId);
     setMessages(rest);
     setMsgId(rest[0].id);
-    setDirty(true);
+    setDirty(false);
+    syncToStore(rest);
   };
 
   const persist = () => {
@@ -794,7 +846,7 @@ export function ProtocolPage() {
                   title={m.hint}
                   onClick={() => {
                     setFraming(m.key);
-                    setDirty(true);
+                    syncToStore(messages, m.key);
                   }}
                 >
                   {m.label}
@@ -808,8 +860,9 @@ export function ProtocolPage() {
                   value={prefix}
                   placeholder="AA 55（可留空）"
                   onChange={(e) => {
-                    setPrefix(e.target.value);
-                    setDirty(true);
+                    const val = e.target.value;
+                    setPrefix(val);
+                    syncToStore(messages, framing, gapMs, val);
                   }}
                 />
               </span>
@@ -821,8 +874,9 @@ export function ProtocolPage() {
                   className="num"
                   value={String(gapMs)}
                   onChange={(e) => {
-                    setGapMs(Number(e.target.value) || 0);
-                    setDirty(true);
+                    const val = Number(e.target.value) || 0;
+                    setGapMs(val);
+                    syncToStore(messages, framing, val);
                   }}
                 />
                 <span className="unit">ms</span>
@@ -850,7 +904,7 @@ export function ProtocolPage() {
                       title={`${ALGORITHM_META[a].label} · ${ALGORITHM_META[a].formula} · ${ALGORITHM_META[a].size} 字节`}
                       onClick={() => {
                         setAlgorithm(a);
-                        setDirty(true);
+                        syncToStore(messages, framing, gapMs, prefix, a);
                       }}
                     >
                       {a.replace("CRC16/", "").replace("CRC8/", "8/")}
@@ -904,8 +958,9 @@ export function ProtocolPage() {
                   value={sampleHex}
                   placeholder="粘贴一帧真实报文，例如 DE 21 09 F6 60 00 00 00"
                   onChange={(e) => {
-                    setSampleHex(e.target.value);
-                    setDirty(true);
+                    const val = e.target.value;
+                    setSampleHex(val);
+                    syncToStore(messages, framing, gapMs, prefix, algorithm, val);
                   }}
                 />
               </span>

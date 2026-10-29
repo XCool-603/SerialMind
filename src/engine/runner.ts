@@ -702,7 +702,7 @@ async function runOnce(
       const allProtocols = host.getAllProtocols ? host.getAllProtocols() : [host.getProtocol()];
       for (const act of item.actions) {
         if (act.enabled === false) continue;
-        const proto = (act.protocolId ? allProtocols.find((p) => p.id === act.protocolId) : null) ?? host.getProtocol();
+        const proto = (act.protocolId ? allProtocols.find((p) => p.id === act.protocolId) : null) ?? allProtocols[0] ?? host.getProtocol();
         const msg = (act.messageId ? proto.messages.find((m) => m.id === act.messageId) : null) ?? proto.messages[0];
         if (!msg) continue;
 
