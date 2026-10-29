@@ -371,9 +371,6 @@ th{color:#8b98a8;font-weight:500}h1{font-size:18px}</style>
                   <button className="btn" onClick={() => setView("case")}>
                     去用例页
                   </button>
-                  <button className="btn" onClick={() => setView("suite")}>
-                    去套件页
-                  </button>
                 </EmptyState>
               ) : (
                 <table className="dt">

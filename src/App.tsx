@@ -7,16 +7,15 @@ import { ProtocolPage } from "./pages/ProtocolPage";
 import { RoundTripModal } from "./pages/RoundTripModal";
 import { CasePage } from "./pages/CasePage";
 import { QuickStart } from "./components/QuickStart";
-import { SuitePage, ReportPage } from "./pages/MiscPages";
+import { ReportPage } from "./pages/MiscPages";
 import { DialogHost } from "./components/Dialog";
 import { AiDraftPanel } from "./pages/AiDraftPanel";
 import { SelfTestPanel } from "./pages/SelfTestPanel";
 
-const VIEWS: ViewKey[] = ["terminal", "protocol", "case", "suite", "report"];
+const VIEWS: ViewKey[] = ["terminal", "protocol", "case", "report"];
 
 export default function App() {
   const activeView = useStore((s) => s.activeView);
-  const caseTab = useStore((s) => s.caseTab);
   const setView = useStore((s) => s.setView);
   const activeProtocolId = useStore((s) => s.activeProtocolId);
 
@@ -49,7 +48,7 @@ export default function App() {
           </>
         )}
         {activeView === "protocol" && <ProtocolPage key={activeProtocolId} />}
-        {activeView === "case" && (caseTab === "suites" ? <SuitePage /> : <CasePage />)}
+        {activeView === "case" && <CasePage />}
         {activeView === "report" && <ReportPage />}
       </div>
       <StatusBar />

@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useStore, type Frame, type Source } from "../engine/store";
-import { toHex, asciiView } from "../engine/bytes";
+import { toHex, asciiView, bytesToString, parseHex, stringToBytes } from "../engine/bytes";
 import { Icon, IC } from "../components/Icon";
 import type { PdlProtocol } from "../engine/pdl";
 import { download, stampName } from "../lib/download";
@@ -34,16 +34,14 @@ function DirCell({ dir }: { dir: "rx" | "tx" }) {
 }
 
 function FieldPairs({ frame, proto }: { frame: Frame; proto?: PdlProtocol }) {
-  // 完全由「当前协议解出的字段」驱动，不写死任何字段名
   const pairs: { k: string; v: string; ok?: boolean }[] = [];
   for (const f of frame.fields ?? []) {
     if (f.field.type === "crc") continue;
     pairs.push({ k: f.field.name, v: `=${f.display}`, ok: f.ok ? undefined : false });
   }
-  // 帧和协议都对不上时，校验结论毫无意义，直接说明
   if (frame.matched === false) {
     pairs.length = 0;
-    pairs.push({ k: "提示", v: frame.banner ?? "这帧不符合当前协议", ok: false });
+    pairs.push({ k: "提示", v: frame.banner ?? "未匹配到预设协议，按原始数据解析", ok: false });
     return (
       <div className="field-list">
         {pairs.map((p, i) => (
@@ -55,7 +53,6 @@ function FieldPairs({ frame, proto }: { frame: Frame; proto?: PdlProtocol }) {
       </div>
     );
   }
-  // 有校验字段才显示校验结论
   const hasCrc = (frame.fields ?? []).some((f) => f.field.type === "crc");
   if (hasCrc) {
     pairs.push({
@@ -65,7 +62,7 @@ function FieldPairs({ frame, proto }: { frame: Frame; proto?: PdlProtocol }) {
     });
   }
   if (frame.banner) pairs.push({ k: "提示", v: frame.banner, ok: false });
-  if (!pairs.length) pairs.push({ k: "原始", v: `${frame.bytes.length} 字节（未解析）` });
+  if (!pairs.length) pairs.push({ k: "原始", v: `${frame.bytes.length} 字节` });
   return (
     <div className="field-list">
       {pairs.map((p, i) => (
@@ -85,6 +82,12 @@ export function TerminalPage() {
     setFilter,
     viewMode,
     setViewMode,
+    termViewMode,
+    setTermViewMode,
+    showTimestamp,
+    setShowTimestamp,
+    autoScroll,
+    setAutoScroll,
     paused,
     togglePause,
     clearFrames,
@@ -93,6 +96,16 @@ export function TerminalPage() {
     sendInput,
     setSendInput,
     sendCurrent,
+    sendMode,
+    setSendMode,
+    sendNewline,
+    setSendNewline,
+    clearOnSend,
+    setClearOnSend,
+    periodSend,
+    togglePeriodSend,
+    periodMs,
+    setPeriodMs,
     autoChecksum,
     setAutoChecksum,
     checksumAlgorithm,
@@ -100,41 +113,45 @@ export function TerminalPage() {
     totalFrames,
     connection,
     setView,
+    quickSends,
+    addQuickSend,
+    updateQuickSend,
+    deleteQuickSend,
+    loopingQuick,
+    toggleLoopQuickSend,
+    loopIntervalMs,
+    setLoopIntervalMs,
+    currentLoopIndex,
+    sendBytes,
+    resetCounters,
   } = useStore();
 
   const [expanded, setExpanded] = useState<Set<number>>(() => new Set());
+  const [quickPanelOpen, setQuickPanelOpen] = useState(true);
+  const streamEndRef = useRef<HTMLDivElement | null>(null);
+
   const link = connection;
-
-  const firstWithFields = frames.find((f) => f.fields)?.id;
-
-  // 快捷发送：按当前协议的真实报文生成（一个报文一个按钮）
   const { protocols, activeProtocolId } = useStore();
   const proto = protocols.find((p) => p.id === activeProtocolId);
-  // 切协议时把自动校验算法同步成协议的算法
+
   useEffect(() => {
     if (proto) setChecksumAlgorithm(proto.checksum.algorithm);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [proto?.id]);
-
-  const quickSends = proto
-    ? proto.messages
-        .filter((m) => m.fields.length > 0)
-        .map((m) => ({
-          label: m.name,
-          run: async () => {
-            const { encodeMessage } = await import("../engine/codec");
-            await useStore.getState().sendBytes(encodeMessage(proto, m, {}), "manual");
-          },
-        }))
-    : [];
 
   const shown = useMemo(
     () => frames.filter((f) => filter === "all" || f.source === filter),
     [frames, filter],
   );
 
-  const isExpanded = (f: Frame) =>
-    expanded.has(f.id) || f.id === selectedFrameId || f.id === firstWithFields;
+  // 自动滚屏
+  useEffect(() => {
+    if (autoScroll && streamEndRef.current) {
+      streamEndRef.current.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [shown.length, autoScroll]);
+
+  const isExpanded = (f: Frame) => expanded.has(f.id) || f.id === selectedFrameId;
 
   const toggleExpand = (id: number) =>
     setExpanded((prev) => {
@@ -145,11 +162,20 @@ export function TerminalPage() {
     });
 
   const hexText = (f: Frame) => (viewMode === "ascii" ? asciiView(f.bytes) : toHex(f.bytes));
-  const sendBytes = sendInput.replace(/[^0-9a-fA-F]/g, "");
-  const sendLen = Math.floor(sendBytes.length / 2);
+
+  const sendLen = useMemo(() => {
+    if (sendMode === "text") {
+      let t = sendInput;
+      if (sendNewline && !t.endsWith("\r\n")) t += "\r\n";
+      return stringToBytes(t, true).length;
+    }
+    const h = sendInput.replace(/[^0-9a-fA-F]/g, "");
+    return Math.floor(h.length / 2) + (sendNewline ? 2 : 0);
+  }, [sendInput, sendMode, sendNewline]);
 
   return (
     <div className="term">
+      {/* 顶栏工具栏 */}
       <div className="term-toolbar">
         {FILTERS.map((f) => (
           <button
@@ -161,154 +187,298 @@ export function TerminalPage() {
             <span>{f.label}</span>
           </button>
         ))}
+
         <span className="spacer" />
-        <span
-          className={proto ? "pill blue" : "pill gray"}
-          title={proto ? `按协议「${proto.name}」解析收发帧` : "没有选中协议，按原始字节显示"}
-          style={{ height: 20, cursor: "pointer" }}
-          onClick={() => setView("protocol")}
-        >
-          解析协议：{proto ? `${proto.name} ${proto.version}` : "原始字节"}
-        </span>
-        {(["hex", "ascii", "field"] as const).map((m) => (
-          <button key={m} className={viewMode === m ? "chip active" : "chip"} onClick={() => setViewMode(m)}>
-            {m === "hex" ? "HEX" : m === "ascii" ? "ASCII" : "字段"}
+
+        {/* 视图模式：SSCom 流式控制台 vs 协议表格 */}
+        <div style={{ display: "flex", gap: 2, background: "var(--bg-panel-2)", padding: 2, borderRadius: 6 }}>
+          <button
+            className={termViewMode === "stream" ? "chip active" : "chip"}
+            style={{ height: 22, fontSize: 11 }}
+            onClick={() => setTermViewMode("stream")}
+            title="像 SSCom 一样的平滑连续控制台流式视图"
+          >
+            <Icon cp={IC.terminal} size={11} color={termViewMode === "stream" ? "var(--accent)" : "var(--t3)"} />
+            控制台视图
+          </button>
+          <button
+            className={termViewMode === "table" ? "chip active" : "chip"}
+            style={{ height: 22, fontSize: 11 }}
+            onClick={() => setTermViewMode("table")}
+            title="结构化协议报文表格视图"
+          >
+            <Icon cp={IC.protocol} size={11} color={termViewMode === "table" ? "var(--accent)" : "var(--t3)"} />
+            报文表格
+          </button>
+        </div>
+
+        {/* 编码切换 HEX / ASCII */}
+        {(["hex", "ascii"] as const).map((m) => (
+          <button
+            key={m}
+            className={viewMode === m ? "chip active" : "chip"}
+            onClick={() => setViewMode(m)}
+          >
+            {m === "hex" ? "HEX 接收" : "字符 接收"}
           </button>
         ))}
+
+        {/* 时间戳与自动滚屏 */}
+        <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11, color: "var(--t2)", cursor: "pointer" }}>
+          <input
+            type="checkbox"
+            checked={showTimestamp}
+            onChange={(e) => setShowTimestamp(e.target.checked)}
+          />
+          时间戳
+        </label>
+        <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11, color: "var(--t2)", cursor: "pointer" }}>
+          <input
+            type="checkbox"
+            checked={autoScroll}
+            onChange={(e) => setAutoScroll(e.target.checked)}
+          />
+          自动滚屏
+        </label>
+
+        {/* 暂停 */}
         <button className="tool-btn" onClick={togglePause} title={paused ? "继续" : "暂停"}>
           <Icon cp={IC.pause} size={13} color={paused ? "var(--amber)" : "var(--t2)"} />
         </button>
+
+        {/* 导出 */}
         <button
           className="tool-btn"
-          title="保存日志到文件（带时间戳）"
+          title="导出日志到文件"
           onClick={() => {
             if (!frames.length) return;
             const lines = frames.map((f) => {
-              const decoded = (f.fields ?? []).filter((x) => x.field.type !== "crc");
-              const sum = decoded.length ? decoded.map((x) => `${x.field.name}=${x.display}`).join(" ") : "（未解析）";
-              const hasCrc = (f.fields ?? []).some((x) => x.field.type === "crc");
-              const crc = !hasCrc
-                ? "—"
-                : f.matched === false
-                  ? "不符合协议"
-                  : f.crcOk
-                    ? "校验OK"
-                    : `校验错(期望${f.crcExpected}/实际${f.crcActual})`;
-              return `${f.time}\t${f.dir === "rx" ? "RX" : "TX"}\t#${f.no}\t${f.bytes.length}B\t${toHex(f.bytes)}\t${crc}\t${sum}`;
+              const text = bytesToString(f.bytes);
+              const hex = toHex(f.bytes);
+              return `[${f.time}] [${f.dir === "rx" ? "RX" : "TX"}] ${text.trim()} | HEX: ${hex}`;
             });
-            const head = [
-              `SerialMind 串口日志`,
-              `导出时间：${new Date().toLocaleString()}`,
-              `端口：${connection.port || "—"} ${connection.baud} ${connection.frame}`,
-              `协议：${proto ? proto.name : "原始字节"}`,
-              `帧数：${frames.length}（RX ${frames.filter((f) => f.dir === "rx").length} / TX ${frames.filter((f) => f.dir === "tx").length}）`,
-              "".padEnd(80, "-"),
-              "时间\t方向\t帧号\t长度\t报文(HEX)\t校验\t字段",
-            ].join("\n");
-            download(stampName("serialmind", "log"), head + "\n" + lines.join("\n"));
+            download(stampName("serialmind", "log"), lines.join("\n"));
           }}
         >
           <Icon cp={IC.download} size={13} color="var(--t2)" />
         </button>
-        <button className="tool-btn" onClick={clearFrames} title="清空">
+
+        {/* 清屏 */}
+        <button className="tool-btn" onClick={clearFrames} title="清空接收区">
           <Icon cp={IC.clear} size={13} color="var(--t2)" />
         </button>
-        </div>
-
-      <div className="term-head">
-        <span className="c-time">时间</span>
-        <span className="c-dir">方向</span>
-        <span className="c-no">帧号</span>
-        <span className="c-src">来源</span>
-        <span className="c-hex">报文</span>
-        <span className="c-len">长度</span>
       </div>
 
-      <div className="term-list">
-        {shown.length === 0 && (
-          <div className="empty-state">
-            <Icon cp={IC.terminal} size={26} color="var(--t5)" />
-            <div className="empty-title">还没有任何报文</div>
-            <div className="empty-desc">
-              {link
-                ? link.connected
-                  ? "链路已连接，等待设备回包；或在下方输入框发送一帧"
-                  : `串口 ${link.port || "未选择"} 未连接 —— 点顶栏串口处选择并连接`
-                : "先在顶栏选择一个串口并连接"}
+      {/* 视图渲染区 */}
+      {termViewMode === "stream" ? (
+        /* SSCom 纯文本连续流式控制台 */
+        <div className="stream-console">
+          {shown.length === 0 && (
+            <div style={{ color: "var(--t4)", textAlign: "center", marginTop: 40 }}>
+              {link.connected ? "串口已就绪，等待数据输入或回显..." : "串口未连接，请在顶栏连接串口设备"}
             </div>
-            <div className="row gap-8" style={{ marginTop: 12 }}>
-              <button className="btn" onClick={() => useStore.getState().setView("terminal")}>
-                <Icon cp={IC.link} size={11} color="var(--t2)" />
-                连接串口
-              </button>
-              <button className="btn" onClick={() => setView("protocol")}>
-                <Icon cp={IC.protocol} size={11} color="var(--t2)" />
-                配置协议
-              </button>
-            </div>
-          </div>
-        )}
-        {shown.map((f) => (
-          <div key={f.id}>
-            {f.banner && (
-              <div className="case-banner">
-                <Icon cp={IC.useCase} size={11} color="#9db6e8" />
-                <span>{f.banner}</span>
-              </div>
-            )}
-            <div
-              className={`msg-row${f.id === selectedFrameId ? " selected" : ""}${!f.crcOk && f.matched !== false ? " error" : ""}`}
-              onClick={() => {
-                selectFrame(f.id);
-                toggleExpand(f.id);
-              }}
-            >
-              <span className="c-time">{f.time}</span>
-              <span className="c-dir">
-                <DirCell dir={f.dir} />
+          )}
+          {shown.map((f) => (
+            <div key={f.id} className={`stream-line ${f.dir}`}>
+              {showTimestamp && <span className="stream-time">[{f.time}]</span>}
+              <span className={`stream-badge ${f.dir}`}>{f.dir === "rx" ? "RX" : "TX"}</span>
+              <span className="stream-text">
+                {viewMode === "ascii" ? bytesToString(f.bytes) : toHex(f.bytes)}
               </span>
-              <span className="c-no">#{f.no}</span>
-              <span className="c-src">{SOURCE_LABEL[f.source]}</span>
-              <span className="c-hex hex-cell">{hexText(f)}</span>
-              <span className="c-len">{f.bytes.length}B</span>
             </div>
-            {f.matched === false && (
-              <div className="err-banner warn-only">
-                <Icon cp={IC.warn} size={11} color="var(--amber)" />
-                <span className="title">不符合当前协议</span>
-                <span className="detail">{f.banner ?? "长度或帧头对不上，按原始字节显示"}</span>
-              </div>
-            )}
-            {!f.crcOk && f.matched !== false && (
-              <div className="err-banner">
-                <Icon cp={IC.warn} size={11} color="var(--red)" />
-                <span className="title">CRC 校验失败</span>
-                <span className="detail">
-                  期望 {f.crcExpected} · 实际 {f.crcActual}
-                  {f.diffBytes?.length ? ` · 差异字节 #${f.diffBytes.join(" #")}` : ""}
-                </span>
-              </div>
-            )}
-            {f.fields && isExpanded(f) && (
-              <div className="field-row">
-                <span className="indent" />
-                <span className="branch">
-                  <Icon cp={IC.branch} size={13} color="#2a3a4c" />
-                </span>
-                <FieldPairs frame={f} proto={proto} />
-              </div>
-            )}
+          ))}
+          <div ref={streamEndRef} />
+        </div>
+      ) : (
+        /* 报文结构化表格视图 */
+        <>
+          <div className="term-head">
+            <span className="c-time">时间</span>
+            <span className="c-dir">方向</span>
+            <span className="c-no">帧号</span>
+            <span className="c-src">来源</span>
+            <span className="c-hex">报文</span>
+            <span className="c-len">长度</span>
           </div>
-        ))}
+
+          <div className="term-list">
+            {shown.length === 0 && (
+              <div className="empty-state">
+                <Icon cp={IC.terminal} size={26} color="var(--t5)" />
+                <div className="empty-title">还没有任何报文</div>
+              </div>
+            )}
+            {shown.map((f) => (
+              <div key={f.id}>
+                <div
+                  className={`msg-row${f.id === selectedFrameId ? " selected" : ""}`}
+                  onClick={() => {
+                    selectFrame(f.id);
+                    toggleExpand(f.id);
+                  }}
+                >
+                  <span className="c-time">{f.time}</span>
+                  <span className="c-dir">
+                    <DirCell dir={f.dir} />
+                  </span>
+                  <span className="c-no">#{f.no}</span>
+                  <span className="c-src">{SOURCE_LABEL[f.source]}</span>
+                  <span className="c-hex hex-cell">{hexText(f)}</span>
+                  <span className="c-len">{f.bytes.length}B</span>
+                </div>
+                {f.fields && isExpanded(f) && (
+                  <div className="field-row">
+                    <span className="indent" />
+                    <span className="branch">
+                      <Icon cp={IC.branch} size={13} color="#2a3a4c" />
+                    </span>
+                    <FieldPairs frame={f} proto={proto} />
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+
+      {/* 底部统计栏 */}
+      <div className="term-foot" style={{ display: "flex", alignItems: "center" }}>
+        <span>已记录 {shown.length} 帧</span>
+        <span style={{ margin: "0 8px", color: "var(--t5)" }}>|</span>
+        <button
+          className="btn sm"
+          style={{ height: 18, fontSize: 10, padding: "0 6px" }}
+          onClick={resetCounters}
+          title="将 RX / TX 字节计数清零"
+        >
+          清零计数
+        </button>
+        <span className="spacer" />
+        <button
+          className="chip"
+          style={{ height: 20, fontSize: 10 }}
+          onClick={() => setQuickPanelOpen(!quickPanelOpen)}
+        >
+          <Icon cp={quickPanelOpen ? IC.chevronDown : IC.chevronRight} size={10} color="var(--accent)" />
+          <span>SSCom 多条快捷指令 ({quickSends.length})</span>
+        </button>
       </div>
 
-      <div className="term-foot">
-        已显示 {shown.length} / {totalFrames.toLocaleString("en-US")} 帧 · 虚拟滚动已开启
-      </div>
+      {/* SSCom 多条快捷指令发送面板 */}
+      {quickPanelOpen && (
+        <div className="quick-panel">
+          <div className="quick-panel-head">
+            <span className="quick-panel-title">
+              <Icon cp={IC.rule} size={12} color="var(--accent)" />
+              多条预设指令
+            </span>
+            <span className="spacer" />
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10, color: "var(--t2)" }}>
+                <span>轮询间隔</span>
+                <input
+                  type="number"
+                  style={{ width: 55, height: 20, background: "#090d14", border: "1px solid var(--line-2)", color: "#fff", borderRadius: 3, padding: "0 4px", fontSize: 10 }}
+                  value={loopIntervalMs}
+                  onChange={(e) => setLoopIntervalMs(Number(e.target.value))}
+                />
+                <span>ms</span>
+              </label>
+              <button
+                className={loopingQuick ? "btn sm danger" : "btn sm"}
+                style={{ height: 22, fontSize: 10, background: loopingQuick ? "var(--red)" : "var(--accent)", color: "#fff" }}
+                onClick={toggleLoopQuickSend}
+              >
+                <Icon cp={loopingQuick ? IC.close : IC.play} size={10} color="#fff" />
+                <span>{loopingQuick ? "停止轮询" : "循环发送勾选项"}</span>
+              </button>
+              <button
+                className="btn sm"
+                style={{ height: 22, fontSize: 10 }}
+                onClick={() => addQuickSend()}
+              >
+                <Icon cp={IC.plus} size={10} color="var(--t2)" />
+                添加
+              </button>
+            </div>
+          </div>
 
+          <div className="quick-panel-body">
+            {quickSends.map((q, idx) => (
+              <div
+                key={q.id}
+                className={`quick-row${loopingQuick && currentLoopIndex === idx ? " active-loop" : ""}`}
+              >
+                <input
+                  type="checkbox"
+                  checked={q.enabled}
+                  onChange={(e) => updateQuickSend(q.id, { enabled: e.target.checked })}
+                  title="勾选后参与循环轮询发送"
+                />
+                <button
+                  className={`quick-mode-btn ${q.hex ? "hex" : "text"}`}
+                  onClick={() => updateQuickSend(q.id, { hex: !q.hex })}
+                  title="点击切换 HEX / 字符模式"
+                >
+                  {q.hex ? "HEX" : "字符"}
+                </button>
+                <input
+                  className="quick-input-content"
+                  value={q.content}
+                  placeholder={q.hex ? "十六进制数据，如 01 03 00 00 00 02" : "文本数据，如 AT+CSQ (支持 \\r\\n)"}
+                  onChange={(e) => updateQuickSend(q.id, { content: e.target.value })}
+                />
+                <input
+                  className="quick-input-note"
+                  value={q.note}
+                  placeholder="指令备注"
+                  onChange={(e) => updateQuickSend(q.id, { note: e.target.value })}
+                />
+                <button
+                  className="quick-send-btn"
+                  onClick={() => {
+                    let bytes: number[] = [];
+                    if (q.hex) {
+                      let h = q.content;
+                      if (sendNewline) h += " 0D 0A";
+                      bytes = parseHex(h);
+                    } else {
+                      let t = q.content;
+                      if (sendNewline && !t.endsWith("\r\n")) t += "\r\n";
+                      bytes = stringToBytes(t, true);
+                    }
+                    if (bytes.length) void sendBytes(bytes, "manual");
+                  }}
+                >
+                  发送
+                </button>
+                <button
+                  className="quick-del-btn"
+                  onClick={() => deleteQuickSend(q.id)}
+                  title="删除此行"
+                >
+                  <Icon cp={IC.trash} size={11} color="var(--t4)" />
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* 单条发送主区域（SSCom 级全能输入栏） */}
       <div className="sendbar">
         <div className="send-input-row">
-          <span className="send-mode">HEX</span>
+          {/* HEX / 文本 模式切换按钮 */}
+          <button
+            className={`quick-mode-btn ${sendMode === "hex" ? "hex" : "text"}`}
+            style={{ width: 52, height: 26, fontSize: 11, fontWeight: "bold" }}
+            onClick={() => setSendMode(sendMode === "hex" ? "text" : "hex")}
+            title="点击切换 发送模式（文本或十六进制）"
+          >
+            {sendMode === "hex" ? "HEX" : "字符"}
+          </button>
+
+          {/* 发送输入框 */}
           <input
             className="send-input"
             value={sendInput}
@@ -316,15 +486,61 @@ export function TerminalPage() {
             onKeyDown={(e) => {
               if (e.key === "Enter") sendCurrent();
             }}
-            placeholder="输入要发送的十六进制字节，回车发送"
+            placeholder={
+              sendMode === "text"
+                ? "输入普通文本或 AT 指令（如 AT+CSQ、支持 \\r\\n），回车直接发送"
+                : "输入十六进制字节（如 01 03 00 00 00 02），回车发送"
+            }
           />
+
           <span className="send-meta">
             <span>{sendLen} 字节</span>
             <span>·</span>
+
+            {/* 加回车换行勾选框 */}
+            <label style={{ display: "flex", alignItems: "center", gap: 3, fontSize: 11, cursor: "pointer", color: sendNewline ? "var(--accent)" : "var(--t3)" }}>
+              <input
+                type="checkbox"
+                checked={sendNewline}
+                onChange={(e) => setSendNewline(e.target.checked)}
+              />
+              加\r\n
+            </label>
+
+            {/* 发送后清空输入框 */}
+            <label style={{ display: "flex", alignItems: "center", gap: 3, fontSize: 11, cursor: "pointer", color: clearOnSend ? "var(--accent)" : "var(--t3)" }}>
+              <input
+                type="checkbox"
+                checked={clearOnSend}
+                onChange={(e) => setClearOnSend(e.target.checked)}
+              />
+              清空
+            </label>
+
+            {/* 定时周期发送 */}
+            <button
+              className={periodSend ? "chip active" : "chip"}
+              style={{ height: 22, color: periodSend ? "#fff" : undefined, background: periodSend ? "var(--green)" : undefined }}
+              onClick={togglePeriodSend}
+              title="定时循环发送当前内容"
+            >
+              <Icon cp={IC.refresh} size={10} color={periodSend ? "#fff" : "var(--t3)"} />
+              定时
+            </button>
+            <input
+              type="number"
+              style={{ width: 50, height: 20, background: "#090d14", border: "1px solid var(--line-2)", color: "#fff", borderRadius: 3, padding: "0 4px", fontSize: 10 }}
+              value={periodMs}
+              onChange={(e) => setPeriodMs(Number(e.target.value))}
+              title="定时周期 (ms)"
+            />
+            <span style={{ fontSize: 10 }}>ms</span>
+
+            {/* 自动校验和 */}
             <button
               className={autoChecksum ? "chip active" : "chip"}
-              style={{ height: 20 }}
-              title="发送时自动在末尾追加校验和（不要求协议里配了校验字段）"
+              style={{ height: 22 }}
+              title="发送时自动在末尾追加校验和"
               onClick={() => setAutoChecksum(!autoChecksum)}
             >
               <Icon cp={IC.check} size={10} color={autoChecksum ? "var(--green)" : "var(--t4)"} />
@@ -333,7 +549,7 @@ export function TerminalPage() {
             {autoChecksum && (
               <select
                 className="cell-select"
-                style={{ height: 20, fontSize: 9, width: 150, border: "1px solid var(--line-2)", borderRadius: 4, background: "var(--bg-panel-2)" }}
+                style={{ height: 22, fontSize: 9, width: 140, border: "1px solid var(--line-2)", borderRadius: 4, background: "var(--bg-panel-2)" }}
                 value={checksumAlgorithm}
                 onChange={(e) => setChecksumAlgorithm(e.target.value)}
                 title="校验算法"
@@ -350,19 +566,15 @@ export function TerminalPage() {
               </select>
             )}
           </span>
-          <button className="btn-primary" style={{ height: 24, padding: "0 10px", fontSize: 11 }} onClick={sendCurrent}>
+
+          <button
+            className="btn-primary"
+            style={{ height: 28, padding: "0 14px", fontSize: 12, fontWeight: "bold" }}
+            onClick={sendCurrent}
+          >
             发送
           </button>
         </div>
-        {quickSends.length > 0 && (
-          <div className="quick-send">
-            {quickSends.map((q) => (
-              <span key={q.label} className="qs-item primary" onClick={() => void q.run()}>
-                {q.label}
-              </span>
-            ))}
-          </div>
-        )}
       </div>
     </div>
   );

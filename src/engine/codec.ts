@@ -279,9 +279,22 @@ export function detectMessage(proto: PdlProtocol, bytes: number[]): PdlMessage {
 }
 
 export function decodeFrame(proto: PdlProtocol, bytes: number[]): DecodeResult {
-  const msg = detectMessage(proto, bytes);
+  if (!proto?.messages?.length) {
+    return {
+      msg: { id: "raw", name: "原始", fields: [] },
+      fields: [],
+      crcOk: true,
+      crcExpected: "",
+      crcActual: "",
+      diffBytes: [],
+      headerOk: true,
+      lengthOk: true,
+      matched: true,
+    };
+  }
+  const msg = detectMessage(proto, bytes) ?? proto.messages[0];
   const frameLen = bytes.length;
-  const layout = resolveLayout(msg, frameLen);
+  const layout = msg ? resolveLayout(msg, frameLen) : [];
   const fields = layout.map((l) => decodeOne(l.field, bytes, l.offset, l.size));
 
   // 自动整帧长度字段：解出的值应等于实际帧长

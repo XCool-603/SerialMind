@@ -660,3 +660,173 @@
 .err-banner.warn-only .detail {
   color: var(--t2);
 }
+
+/* ===== SSCom 模式：流式终端视图 ===== */
+.stream-console {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+  padding: 8px 12px;
+  font-family: var(--font-mono, "JetBrains Mono", Consolas, "Courier New", monospace);
+  font-size: 11px;
+  line-height: 1.5;
+  background: #0d1117;
+  color: #c9d1d9;
+  user-select: text;
+}
+.stream-line {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 1px 0;
+  word-break: break-all;
+  white-space: pre-wrap;
+}
+.stream-line.rx {
+  color: #7ee787;
+}
+.stream-line.tx {
+  color: #79c0ff;
+}
+.stream-time {
+  flex: none;
+  color: #8b949e;
+  font-size: 10px;
+}
+.stream-badge {
+  flex: none;
+  padding: 0 4px;
+  border-radius: 3px;
+  font-size: 9px;
+  font-weight: bold;
+}
+.stream-badge.rx {
+  background: rgba(46, 160, 67, 0.2);
+  color: #3fb950;
+  border: 1px solid rgba(46, 160, 67, 0.4);
+}
+.stream-badge.tx {
+  background: rgba(56, 139, 253, 0.15);
+  color: #58a6ff;
+  border: 1px solid rgba(56, 139, 253, 0.3);
+}
+.stream-text {
+  flex: 1;
+}
+
+/* ===== SSCom 多条快捷指令面板 ===== */
+.quick-panel {
+  border-top: 1px solid var(--line-1);
+  background: var(--bg-panel-1, #13171f);
+  display: flex;
+  flex-direction: column;
+  max-height: 260px;
+  min-height: 160px;
+  flex: none;
+}
+.quick-panel-head {
+  height: 32px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 12px;
+  background: var(--bg-panel-2, #181d27);
+  border-bottom: 1px solid var(--line-1);
+  font-size: 11px;
+}
+.quick-panel-title {
+  font-weight: 600;
+  color: var(--t1);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.quick-panel-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 6px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.quick-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 4px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.02);
+}
+.quick-row.active-loop {
+  background: rgba(56, 139, 253, 0.18);
+  border-left: 2px solid var(--accent);
+}
+.quick-mode-btn {
+  height: 20px;
+  width: 44px;
+  border-radius: 3px;
+  border: 1px solid var(--line-2);
+  background: var(--bg-panel-3);
+  font-size: 10px;
+  color: var(--t2);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.quick-mode-btn.hex {
+  color: #e5c07b;
+  border-color: rgba(229, 192, 123, 0.4);
+}
+.quick-input-content {
+  flex: 2;
+  height: 22px;
+  background: #090d14;
+  border: 1px solid var(--line-2);
+  border-radius: 4px;
+  padding: 0 6px;
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  color: var(--t1);
+}
+.quick-input-note {
+  flex: 1;
+  height: 22px;
+  background: #090d14;
+  border: 1px solid var(--line-2);
+  border-radius: 4px;
+  padding: 0 6px;
+  font-size: 11px;
+  color: var(--t3);
+}
+.quick-send-btn {
+  height: 22px;
+  padding: 0 8px;
+  font-size: 10px;
+  border-radius: 4px;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.quick-send-btn:hover {
+  filter: brightness(1.15);
+}
+.quick-del-btn {
+  width: 20px;
+  height: 20px;
+  border-radius: 3px;
+  background: transparent;
+  border: none;
+  color: var(--t4);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.quick-del-btn:hover {
+  color: var(--red);
+}

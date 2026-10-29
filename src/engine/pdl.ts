@@ -108,6 +108,28 @@ export const CRANE_PROTOCOL: PdlProtocol = {
   updatedAt: "2 分钟前",
   messages: [
     {
+      id: "heartbeat",
+      name: "心跳保活帧",
+      fields: [
+        F({ name: "addr", type: "uint", size: 1, offset: 0, value: 1, desc: "从站地址" }),
+        F({ name: "func", type: "enum", size: 1, offset: 1, value: 0x01, desc: "心跳指令", enumMap: { 0x01: "心跳保活" } }),
+        F({ name: "seq", type: "uint", size: 2, offset: 2, byteOrder: "ABCD", value: 1, desc: "心跳序号" }),
+        F({ name: "crc16", type: "crc", size: 2, offset: 4, byteOrder: "BADC", desc: "CRC16校验" }),
+      ],
+    },
+    {
+      id: "vehicle_status",
+      name: "车辆行驶状态",
+      fields: [
+        F({ name: "addr", type: "uint", size: 1, offset: 0, value: 1, desc: "从站地址" }),
+        F({ name: "func", type: "enum", size: 1, offset: 1, value: 0x02, desc: "行驶状态上报", enumMap: { 0x02: "行驶状态" } }),
+        F({ name: "distance", type: "uint", size: 2, offset: 2, byteOrder: "ABCD", value: 0, desc: "行走距离", unit: "m" }),
+        F({ name: "speed", type: "uint", size: 2, offset: 4, byteOrder: "ABCD", value: 20, desc: "当前车速", unit: "km/h" }),
+        F({ name: "score", type: "uint", size: 2, offset: 6, byteOrder: "ABCD", value: 100, desc: "车辆得分", unit: "分" }),
+        F({ name: "crc16", type: "crc", size: 2, offset: 8, byteOrder: "BADC", desc: "CRC16校验" }),
+      ],
+    },
+    {
       id: "status",
       name: "状态上报",
       fields: [

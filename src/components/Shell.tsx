@@ -311,23 +311,14 @@ export function TopBar() {
       </div>
 
       <div className="topbar-actions">
-        <button className="auto-send" onClick={toggleAutoSend}>
-          <Icon cp={IC.rule} size={14} color="var(--t4)" />
-          <span className="auto-send-label">自动发送</span>
-          <span className={autoSend ? "switch-track on" : "switch-track"}>
-            <span className="switch-knob" />
-          </span>
-          <span className="switch-state">{autoSend ? "开" : "关"}</span>
-        </button>
-
         <button className="ai-switch" onClick={() => useStore.getState().toggleAi()}>
           <Icon cp={IC.ai} size={14} color="var(--purple)" />
           <span className="ai-switch-label">AI · {aiLevel}</span>
         </button>
 
-        <button className="btn-primary" onClick={() => void useStore.getState().runActiveSuite()}>
+        <button className="btn-primary" onClick={() => void useStore.getState().runActiveCase()}>
           <Icon cp={IC.play} size={14} color="#fff" />
-          <span>跑一遍</span>
+          <span>运行当前用例</span>
         </button>
 
         <button className="icon-btn" title="帮助 / 关于" onClick={() => setHelpOpen(true)}>
@@ -380,22 +371,16 @@ export function Sidebar() {
     activeSubProductId,
     roles,
     protocols,
-    rules,
     cases,
-    suites,
     activeRoleId,
     activeProtocolId,
     activeCaseId,
-    activeSuiteId,
     setActiveRole,
     setActiveProtocol,
     setActiveCase,
-    setActiveSuite,
     setActiveSubProduct,
     setView,
     activeView,
-    toggleRule,
-    caseTab,
   } = useStore();
 
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
@@ -405,7 +390,7 @@ export function Sidebar() {
   const moveNode = useStore((s) => s.moveNode);
 
   /** 树节点拖拽：同类型之间可换位置 */
-  const dnd = (kind: "subProduct" | "role" | "rule" | "case" | "suite" | "protocol", id: string) => ({
+  const dnd = (kind: "subProduct" | "role" | "case" | "protocol", id: string) => ({
     draggable: true,
     onDragStart: (e: React.DragEvent) => {
       e.stopPropagation();
@@ -439,14 +424,12 @@ export function Sidebar() {
   const dropCls = (id: string) => (overId === id ? " drag-over" : "");
 
   /** 右键「上移/下移」：找同父邻居再 moveNode，不依赖拖拽 */
-  const shift = (kind: "subProduct" | "role" | "rule" | "case" | "suite" | "protocol", id: string, dir: -1 | 1) => {
+  const shift = (kind: "subProduct" | "role" | "case" | "protocol", id: string, dir: -1 | 1) => {
     const s = useStore.getState();
     const listOf = () => {
       if (kind === "subProduct") return s.subProducts;
       if (kind === "role") return s.roles;
-      if (kind === "rule") return s.rules;
       if (kind === "case") return s.cases;
-      if (kind === "suite") return s.suites;
       return s.protocols;
     };
     const parentOf = (x: { subProductId?: string }) => x.subProductId ?? "";
@@ -575,7 +558,6 @@ export function Sidebar() {
 
             {subProducts.map((sp) => {
               const spRoles = roles.filter((r) => r.subProductId === sp.id);
-              const spRules = rules.filter((r) => r.subProductId === sp.id);
               const spCases = cases.filter((c) => c.subProductId === sp.id);
               const spProtocols = protocols.filter((p) => (p.subProductId ?? "") === sp.id);
               const key = `sp:${sp.id}`;
@@ -685,12 +667,12 @@ export function Sidebar() {
                         spRoles.map((r) => (
                           <div
                             key={r.id}
-                            className={`tree-item indent-3${r.id === activeRoleId && activeView === "role" ? " active" : ""}${dropCls(r.id)}`}
+                            className={`tree-item indent-3${r.id === activeRoleId ? " active" : ""}${dropCls(r.id)}`}
                             {...dnd("role", r.id)}
                             onClick={() => {
                               setActiveRole(r.id);
                               setActiveSubProduct(sp.id);
-                              setView("role");
+                              void import("../lib/actions").then((m) => m.editRole(r));
                             }}
                             onContextMenu={(e) =>
                               openCtx(e, [
@@ -716,40 +698,7 @@ export function Sidebar() {
                           </div>
                         ))}
 
-                      {/* 规则 */}
-                      {groupRow(`rules:${sp.id}`, IC.rule, "规则", spRules.length, () => {
-                        setActiveSubProduct(sp.id);
-                        void import("../lib/actions").then((m) => m.newRule());
-                      })}
-                      {!isCollapsed(`rules:${sp.id}`) &&
-                        spRules.map((r) => (
-                          <div
-                            key={r.id}
-                            className="tree-item indent-3"
-                            onClick={() => {
-                              setActiveSubProduct(sp.id);
-                              setView("rule");
-                            }}
-                            onContextMenu={(e) =>
-                              openCtx(e, [
-                                { label: r.enabled ? "停用" : "启用", onClick: () => toggleRule(r.id) },
-                                { label: "上移", onClick: () => shift("rule", r.id, -1) },
-                                { label: "下移", onClick: () => shift("rule", r.id, 1) },
-                                { label: "复制规则", onClick: () => useStore.getState().duplicateRule(r.id) },
-                                { label: "重命名规则", onClick: () => void import("../lib/actions").then((m) => m.renameRule(r)) },
-                                { label: "删除规则", danger: true, onClick: () => void import("../lib/actions").then((m) => m.deleteRule(r)) },
-                              ])
-                            }
-                          >
-                            <Icon cp={r.icon} size={11} color={r.enabled ? r.iconColor : "var(--t4)"} />
-                            <span className="label">{r.name}</span>
-                            <span className="spacer" />
-                            {actionBtn([
-                              { label: r.enabled ? "停用" : "启用", onClick: () => toggleRule(r.id) },
-                              { label: "删除规则", danger: true, onClick: () => void import("../lib/actions").then((m) => m.deleteRule(r)) },
-                            ])}
-                          </div>
-                        ))}
+
 
                       {/* 用例 */}
                       {groupRow(`cases:${sp.id}`, IC.case, "用例", spCases.length, () => {
@@ -760,7 +709,7 @@ export function Sidebar() {
                         spCases.map((c) => (
                           <div
                             key={c.id}
-                            className={`tree-item indent-3${c.id === activeCaseId && activeView === "case" && caseTab === "cases" ? " active" : ""}${dropCls(c.id)}`}
+                            className={`tree-item indent-3${c.id === activeCaseId && activeView === "case" ? " active" : ""}${dropCls(c.id)}`}
                             {...dnd("case", c.id)}
                             onClick={() => {
                               setActiveCase(c.id);
@@ -793,42 +742,6 @@ export function Sidebar() {
               );
             })}
 
-            {/* 套件（产品级） */}
-            {groupRow("suites", IC.product, "套件", suites.length, () => void import("../lib/actions").then((m) => m.newSuite()))}
-            {!isCollapsed("suites") &&
-              suites.map((st) => (
-                <div
-                  key={st.id}
-                  className={`tree-item indent-2${st.id === activeSuiteId && activeView === "case" && caseTab === "suites" ? " active" : ""}${dropCls(st.id)}`}
-                  {...dnd("suite", st.id)}
-                  onClick={() => {
-                    setActiveSuite(st.id);
-                    setView("suite");
-                  }}
-                  onContextMenu={(e) =>
-                    openCtx(e, [
-                      { label: "上移", onClick: () => shift("suite", st.id, -1) },
-                      { label: "下移", onClick: () => shift("suite", st.id, 1) },
-                      { label: "运行套件", onClick: () => { setActiveSuite(st.id); void useStore.getState().runActiveSuite(); } },
-                      { label: "复制套件", onClick: () => useStore.getState().duplicateSuite(st.id) },
-                      { label: "删除套件", danger: true, onClick: () => void import("../lib/actions").then((m) => m.deleteSuite(st)) },
-                    ])
-                  }
-                >
-                  <span className="label">{st.name}</span>
-                  <span className="label" style={{ fontSize: 10, color: "var(--t3)" }}>
-                    {st.tag ? cases.filter((c) => c.tags.includes(st.tag!)).length : cases.length} 项
-                  </span>
-                  <span className="spacer" />
-                  {actionBtn([
-                    { label: "上移", onClick: () => shift("suite", st.id, -1) },
-                    { label: "下移", onClick: () => shift("suite", st.id, 1) },
-                    { label: "运行套件", onClick: () => { setActiveSuite(st.id); void useStore.getState().runActiveSuite(); } },
-                    { label: "复制套件", onClick: () => useStore.getState().duplicateSuite(st.id) },
-                    { label: "删除套件", danger: true, onClick: () => void import("../lib/actions").then((m) => m.deleteSuite(st)) },
-                  ])}
-                </div>
-              ))}
           </div>
         )}
       </div>

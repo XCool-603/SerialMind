@@ -103,6 +103,49 @@ export function asciiView(bytes: number[]): string {
   return bytes.map((b) => (b >= 0x20 && b <= 0x7e ? String.fromCharCode(b) : "·")).join("");
 }
 
+/** 字符串转为 UTF-8 字节，支持 \r, \n, \t, \xHH 转义 */
+export function stringToBytes(str: string, parseEscapes = true): number[] {
+  let s = str;
+  if (parseEscapes) {
+    s = s
+      .replace(/\\r/g, "\r")
+      .replace(/\\n/g, "\n")
+      .replace(/\\t/g, "\t")
+      .replace(/\\x([0-9a-fA-F]{2})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
+  }
+  const encoder = new TextEncoder();
+  return Array.from(encoder.encode(s));
+}
+
+/** 字节数组转为 UTF-8 字符串（非打印字符安全转换） */
+export function bytesToString(bytes: number[]): string {
+  try {
+    const decoder = new TextDecoder("utf-8", { fatal: false });
+    return decoder.decode(new Uint8Array(bytes));
+  } catch {
+    return asciiView(bytes);
+  }
+}
+
+/**
+ * 匹配十六进制通配符模式
+ * 模式如 "01 03 ?? ?? 00 01" 或 "01 03 * 00"
+ */
+export function matchHexPattern(pattern: string, actualBytes: number[]): boolean {
+  const pTokens = pattern.trim().split(/\s+/).filter(Boolean);
+  if (!pTokens.length) return false;
+
+  const actualHex = actualBytes.map((b) => b.toString(16).toUpperCase().padStart(2, "0"));
+  if (pTokens.length !== actualHex.length) return false;
+
+  for (let i = 0; i < pTokens.length; i++) {
+    const token = pTokens[i].toUpperCase();
+    if (token === "??" || token === "*" || token === "?") continue;
+    if (token !== actualHex[i]) return false;
+  }
+  return true;
+}
+
 export function bitsOf(byte: number, from: number, to: number): number {
   const width = from - to + 1;
   const mask = (1 << width) - 1;

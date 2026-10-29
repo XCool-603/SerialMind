@@ -1,14 +1,14 @@
 /**
- * 测试执行引擎（真跑，不造假）
+ * 测试执行引擎（真跑，支持类似 Apifox 的接口变量提取与断言体系）
  *
- * - 步骤真的驱动链路：set 组包发送、send 发原始字节、expect 真等回包、assertNo 真查异常
- * - 断言基于解包后的字段值，不是字符串比对
- * - 链路未连接时，expect 会真超时失败，并在结果里说明原因
- * - 运行产物（RunResult）是报告页唯一数据来源，没有预置报告
+ * - 步骤真驱动串口链路：发 HEX / 发文本、参数占位符替换 ${name}
+ * - 后置变量提取 (Extract)：从回包中通过 正则 / 字节范围 / 协议字段 提取变量
+ * - 可视化断言 (Assert)：文本包含、正则匹配、HEX 通配符匹配 (??)、数值/范围比较
+ * - 复杂流程控制：支持 if 分支、while 循环、重试、延时
  */
 import { appendChecksum, decodeFrame, encodeMessage, hasChecksum, type DecodedField } from "./codec";
-import { parseHex, toHex } from "./bytes";
-import { CRANE_PROTOCOL, type PdlProtocol } from "./pdl";
+import { parseHex, toHex, stringToBytes, bytesToString, matchHexPattern } from "./bytes";
+import type { PdlProtocol } from "./pdl";
 import type { CaseItem, CaseStep, Frame, RunResult, StepResult } from "./types";
 
 export interface RunnerHost {
@@ -17,9 +17,7 @@ export interface RunnerHost {
   pushFrame: (f: Omit<Frame, "id" | "time" | "ts" | "no">) => void;
   write: (bytes: number[]) => Promise<void>;
   isLinkOpen: () => boolean;
-  /** 发送裸 HEX 时是否自动补校验和 */
   autoChecksum?: () => boolean;
-  /** 用户点了停止 */
   shouldStop?: () => boolean;
   onStep?: (caseId: string, stepIndex: number, result: StepResult) => void;
 }
@@ -109,24 +107,22 @@ function parseTimeout(raw: string | undefined, fallback = 3000): number {
   return v;
 }
 
-/* ---------------- 控制流（if / while / 变量） ---------------- */
+/* ---------------- 变量与参数替换 ---------------- */
 
 type Ctrl = "ok" | "fail" | "break" | "continue";
 
 interface RunCtx {
   startFrameIndex: number;
   linkOpen: boolean;
-  /** 运行期变量：setVar 写入，条件判断和 ${name} 读取 */
-  vars: Record<string, number>;
+  vars: Record<string, string | number>;
   depth: number;
   retries: number;
-  /** 失败即停：true 时遇到失败立刻中断，false 时继续跑完剩余步骤 */
   abortOnFail: boolean;
 }
 
 const MAX_DEPTH = 6;
 
-function substText(s: string | undefined, vars: Record<string, number>): string | undefined {
+function substText(s: string | undefined, vars: Record<string, string | number>): string | undefined {
   if (!s) return s;
   return s.replace(/\$\{([^}]+)\}/g, (m, k) => {
     const v = vars[String(k).trim()];
@@ -134,20 +130,25 @@ function substText(s: string | undefined, vars: Record<string, number>): string 
   });
 }
 
-function substStep(step: CaseStep, vars: Record<string, number>): CaseStep {
+function substStep(step: CaseStep, vars: Record<string, string | number>): CaseStep {
   if (!Object.keys(vars).length) return step;
   return {
     ...step,
     detail: substText(step.detail, vars),
     cond: substText(step.cond, vars),
     timeout: substText(step.timeout, vars),
+    targetVar: substText(step.targetVar, vars),
+    extractRule: substText(step.extractRule, vars),
     fields: step.fields?.map((f) => ({ label: f.label, value: substText(f.value, vars) ?? "" })),
   };
 }
 
-/** 取条件左边的值：先查运行期变量，再查最近一帧回包字段 */
+/** 取条件左边的值：先查变量，再查最近回包 */
 function condValue(host: RunnerHost, name: string, ctx: RunCtx): number | null {
-  if (ctx.vars[name] !== undefined) return ctx.vars[name];
+  if (ctx.vars[name] !== undefined) {
+    const n = Number(ctx.vars[name]);
+    return Number.isFinite(n) ? n : null;
+  }
   const frames = host
     .getFrames()
     .slice(ctx.startFrameIndex)
@@ -156,35 +157,36 @@ function condValue(host: RunnerHost, name: string, ctx: RunCtx): number | null {
   return last ? fieldNumber(last.fields, name) : null;
 }
 
-/** 条件求值，支持：> < >= <= == != equals range in exists notexists */
 function evalCond(host: RunnerHost, cond: string | undefined, ctx: RunCtx): { ok: boolean; detail: string } {
   const raw = (cond ?? "").trim();
   if (!raw) return { ok: false, detail: "条件为空" };
   const m = raw.match(/^([A-Za-z_]\w*)\s*(>=|<=|==|!=|=|>|<)?\s*(.*)$/);
-  if (!m) return { ok: false, detail: `条件写法看不懂：${raw}` };
+  if (!m) return { ok: false, detail: `条件格式无法识别：${raw}` };
   const name = m[1];
   const sym = m[2];
   const rest = (m[3] ?? "").trim();
   const opStr = sym ? `${sym} ${rest}`.trim() : rest;
   const op = parseOp(opStr);
-  if (!op) return { ok: false, detail: `条件运算符看不懂：${raw}` };
+  if (!op) return { ok: false, detail: `无法识别比较符：${raw}` };
   const v = condValue(host, name, ctx);
   if (op.kind === "exists" || op.kind === "notexists") {
     const has = v !== null;
     const ok = op.kind === "exists" ? has : !has;
-    return { ok, detail: `${name} ${op.kind === "exists" ? "存在" : "不存在"} → ${has ? "有" : "无"}` };
+    return { ok, detail: `${name} ${op.kind === "exists" ? "存在" : "不存在"}` };
   }
-  if (v === null) return { ok: false, detail: `${name} 取不到值（既不是变量，最近也没有含该字段的回包）` };
+  if (v === null) return { ok: false, detail: `${name} 当前未获取到数值` };
   const ok = evalOp(v, op);
   return { ok, detail: `${name}=${v} ${opStr} → ${ok ? "成立" : "不成立"}` };
 }
 
-/** setVar 的表达式求值：支持 a+b / a-b / a*b / a/b / 常量 */
-function evalExpr(expr: string, vars: Record<string, number>): number | null {
+function evalExpr(expr: string, vars: Record<string, string | number>): number | null {
   const s = expr.trim().replace(/^=\s*/, "");
   const m = s.match(/^([A-Za-z_]\w*|-?\d+(?:\.\d+)?)\s*(?:([+\-*/])\s*([A-Za-z_]\w*|-?\d+(?:\.\d+)?))?$/);
   if (!m) return null;
-  const pick = (t: string): number => (vars[t] !== undefined ? vars[t] : Number(t));
+  const pick = (t: string): number => {
+    const v = vars[t];
+    return v !== undefined ? Number(v) : Number(t);
+  };
   const a = pick(m[1]);
   if (!Number.isFinite(a)) return null;
   if (!m[2]) return a;
@@ -217,10 +219,8 @@ const mkResult = (
   ...extra,
 });
 
-/**
- * 执行一串步骤（支持嵌套）。返回 ok / fail / break / continue。
- * 叶子步骤失败会按 retries 重试；块（if / while）失败不重试，直接向上抛。
- */
+/* ---------------- 步骤列表递归执行 ---------------- */
+
 async function runList(
   host: RunnerHost,
   steps: CaseStep[],
@@ -284,7 +284,7 @@ async function runList(
         ...mkResult(step, "pass"),
         text: `${tag}while ${step.cond ?? ""}`,
         expected: `最多 ${maxIter} 次`,
-        actual: `执行 ${n} 次后条件${c.ok ? "仍成立（到上限）" : "不再成立"}`,
+        actual: `执行 ${n} 次后条件${c.ok ? "到上限" : "结束"}`,
       });
       continue;
     }
@@ -302,16 +302,17 @@ async function runList(
   }
   return hadFail ? "fail" : "ok";
 }
-/* ---------------- 步骤执行 ---------------- */
 
-async function runStep(
-  host: RunnerHost,
-  step: CaseStep,
-  ctx: { startFrameIndex: number; linkOpen: boolean },
-): Promise<StepResult> {
+/* ---------------- 步骤单步执行 ---------------- */
+
+async function runStep(host: RunnerHost, step: CaseStep, ctx: RunCtx): Promise<StepResult> {
   const startedAt = nowTime();
   const t0 = performance.now();
-  const base: Omit<StepResult, "status" | "durationMs" | "startedAt"> = { stepId: step.id, kind: step.kind, text: step.text };
+  const base: Omit<StepResult, "status" | "durationMs" | "startedAt"> = {
+    stepId: step.id,
+    kind: step.kind,
+    text: step.text,
+  };
 
   const finish = (status: StepResult["status"], extra: Partial<StepResult> = {}): StepResult => ({
     ...base,
@@ -335,13 +336,183 @@ async function runStep(
 
   try {
     switch (step.kind) {
+      /* ------------ 发送指令 (支持纯文本与 HEX，支持占位符) ------------ */
+      case "send": {
+        const rawContent = step.detail ?? "";
+        let bytes: number[] = [];
+        const stripped = rawContent.replace(/0x/gi, "").replace(/[\s,;:_-]/g, "");
+        const hasNonHexChars = /[^0-9a-fA-F]/.test(stripped);
+        const isText = step.sendMode === "text" || rawContent.startsWith("TEXT:") || hasNonHexChars || /[\r\n]/.test(rawContent);
+        const cleanContent = rawContent.startsWith("TEXT:") ? rawContent.slice(5) : rawContent;
+
+        if (isText) {
+          bytes = stringToBytes(cleanContent, true);
+        } else {
+          bytes = parseHex(cleanContent);
+        }
+
+        if (!bytes.length) {
+          return finish("fail", { error: "发送内容为空或无效十六进制" });
+        }
+
+        // 自动追加校验和
+        if (host.autoChecksum?.() && !isText) {
+          if (hasChecksum(proto)) {
+            const probe = decodeFrame(proto, bytes);
+            if (!(probe.matched && probe.crcOk)) bytes = appendChecksum(proto, bytes);
+          }
+        }
+
+        await sendBytes(bytes, "case");
+        return finish("pass", {
+          expected: isText ? `[文本] ${cleanContent}` : `[HEX] ${toHex(bytes)}`,
+          actual: `已发送 ${bytes.length} 字节`,
+          frameHex: toHex(bytes),
+        });
+      }
+
+      /* ------------ 后置提取变量 (Apifox 核心机制) ------------ */
+      case "extract": {
+        const varName = (step.targetVar || step.fields?.[0]?.label || "val").trim();
+        const extractType = step.extractType || "regex";
+        const rule = step.extractRule || step.fields?.[0]?.value || "";
+        const timeout = parseTimeout(step.timeout, 2000);
+        const deadline = performance.now() + timeout;
+
+        let extractedValue: string | number | null = null;
+        let lastHex = "";
+
+        while (performance.now() < deadline) {
+          const frames = host.getFrames().slice(ctx.startFrameIndex).filter((f) => f.dir === "rx");
+          for (const fr of frames) {
+            lastHex = toHex(fr.bytes);
+            if (extractType === "regex") {
+              const text = bytesToString(fr.bytes);
+              try {
+                const regex = new RegExp(rule);
+                const m = text.match(regex);
+                if (m) {
+                  extractedValue = m[1] !== undefined ? m[1] : m[0];
+                  break;
+                }
+              } catch {}
+            } else if (extractType === "slice") {
+              const parts = rule.split(/[:,-]/).map((x) => Number(x.trim()));
+              const start = parts[0] || 0;
+              const end = parts.length > 1 ? parts[1] : start + 1;
+              const sliceBytes = fr.bytes.slice(start, end);
+              if (sliceBytes.length) {
+                extractedValue = toHex(sliceBytes);
+                break;
+              }
+            } else if (extractType === "field") {
+              const num = fieldNumber(fr.fields, rule);
+              if (num !== null) {
+                extractedValue = num;
+                break;
+              }
+            }
+          }
+          if (extractedValue !== null) break;
+          await sleep(20);
+        }
+
+        if (extractedValue !== null) {
+          ctx.vars[varName] = extractedValue;
+          return finish("pass", {
+            expected: `提取 ${varName}`,
+            actual: `${varName} = "${extractedValue}"`,
+            extractedVars: { [varName]: extractedValue },
+            frameHex: lastHex,
+          });
+        }
+        return finish("fail", {
+          expected: `在 ${timeout}ms 内提取 ${varName} (规则: ${rule})`,
+          actual: lastHex ? "回包内容未匹配提取规则" : "超时未收到任何回包",
+          frameHex: lastHex || undefined,
+        });
+      }
+
+      /* ------------ Apifox 风格断言 (文本包含 / 正则 / HEX通配 / 数值) ------------ */
+      case "assert":
+      case "expect": {
+        const timeout = parseTimeout(step.timeout);
+        const deadline = performance.now() + timeout;
+        const f0 = step.fields?.[0];
+        const assertType = f0?.label || "contains";
+        const expectedVal = f0?.value || step.detail || "";
+
+        let matchFound = false;
+        let lastObserved = "";
+        let lastHex = "";
+
+        while (performance.now() < deadline) {
+          const frames = host.getFrames().slice(ctx.startFrameIndex).filter((x) => x.dir === "rx");
+          for (const fr of frames) {
+            const text = bytesToString(fr.bytes);
+            lastHex = toHex(fr.bytes);
+
+            if (assertType === "contains" || assertType === "文本包含") {
+              if (text.includes(expectedVal)) {
+                matchFound = true;
+                lastObserved = text;
+                break;
+              }
+            } else if (assertType === "regex" || assertType === "正则匹配") {
+              try {
+                if (new RegExp(expectedVal).test(text)) {
+                  matchFound = true;
+                  lastObserved = text;
+                  break;
+                }
+              } catch {
+                /* invalid regex */
+              }
+            } else if (assertType === "hex" || assertType === "HEX通配") {
+              if (matchHexPattern(expectedVal, fr.bytes)) {
+                matchFound = true;
+                lastObserved = toHex(fr.bytes);
+                break;
+              }
+            } else {
+              // 字段数值断言，如 position equals 3000
+              const op = parseOp(expectedVal);
+              const num = fieldNumber(fr.fields, assertType);
+              if (num !== null && op && evalOp(num, op)) {
+                matchFound = true;
+                lastObserved = `${assertType}=${num}`;
+                break;
+              }
+            }
+          }
+
+          if (matchFound) break;
+          await sleep(30);
+        }
+
+        if (matchFound) {
+          return finish("pass", {
+            expected: `${assertType}: ${expectedVal}`,
+            actual: `断言通过（${lastObserved}）`,
+            frameHex: lastHex,
+          });
+        }
+
+        return finish("fail", {
+          expected: `${assertType}: ${expectedVal}（在 ${timeout}ms 内）`,
+          actual: ctx.linkOpen ? (lastHex ? `收到回包 ${lastHex}，断言不符` : "窗口内未收到任何回包") : "串口未连接",
+          frameHex: lastHex || undefined,
+        });
+      }
+
+      /* ------------ 组包修改并发送 (针对配置了结构化协议) ------------ */
       case "set": {
-        // field <name> = <value> → 组包发送
         const f = step.fields?.[0];
         if (!f) return finish("fail", { error: "set 步骤缺少字段" });
         const raw = f.value.replace(/^=\s*/, "");
         const num = Number(raw);
         const msg = proto.messages.find((m) => m.id === "status") ?? proto.messages[0];
+        if (!msg) return finish("fail", { error: "协议中没有可发送的报文定义" });
         const values: Record<string, number> = {};
         for (const fld of msg.fields) {
           if (fld.type === "crc" || fld.offset < 0) continue;
@@ -357,61 +528,7 @@ async function runStep(
         });
       }
 
-      case "send": {
-        let bytes = parseHex(step.detail ?? "");
-        if (!bytes.length) return finish("fail", { error: "send 步骤没有有效字节" });
-        // 自动补校验和：只在这帧还不合法时才补（避免给已带校验的帧再加一遍）
-        if (host.autoChecksum?.()) {
-          const proto = host.getProtocol();
-          if (hasChecksum(proto)) {
-            const probe = decodeFrame(proto, bytes);
-            if (!(probe.matched && probe.crcOk)) bytes = appendChecksum(proto, bytes);
-          }
-        }
-        await sendBytes(bytes, "case");
-        return finish("pass", { actual: toHex(bytes), frameHex: toHex(bytes) });
-      }
-
-      case "expect": {
-        const f = step.fields?.[0];
-        if (!f) return finish("fail", { error: "expect 步骤缺少断言" });
-        const op = parseOp(f.value);
-        if (!op) return finish("fail", { error: `无法解析断言：${f.label} ${f.value}` });
-        const timeout = parseTimeout(step.timeout);
-        const deadline = performance.now() + timeout;
-
-        while (performance.now() < deadline) {
-          const frames = host.getFrames().slice(ctx.startFrameIndex);
-          for (const fr of frames) {
-            if (fr.dir !== "rx" || !fr.crcOk) continue;
-            const v = fieldNumber(fr.fields, f.label);
-            if (v !== null && evalOp(v, op)) {
-              return finish("pass", {
-                expected: `${f.label} ${f.value}`,
-                actual: `${f.label}=${v}（${fr.time} 收到）`,
-                frameHex: toHex(fr.bytes),
-              });
-            }
-          }
-          await sleep(30);
-        }
-
-        // 超时：尽量给出最后一次观测到的值，便于排障
-        const frames = host.getFrames().slice(ctx.startFrameIndex).filter((x) => x.dir === "rx");
-        const last = frames[frames.length - 1];
-        const lastVal = last ? fieldNumber(last.fields, f.label) : null;
-        const why = !ctx.linkOpen
-          ? "串口未连接，收不到回包"
-          : frames.length === 0
-            ? "窗口内未收到任何回包"
-            : `最后一次 ${f.label}=${lastVal ?? "未解出"}`;
-        return finish("fail", {
-          expected: `${f.label} ${f.value}（${timeout}ms 内）`,
-          actual: why,
-          frameHex: last ? toHex(last.bytes) : undefined,
-        });
-      }
-
+      /* ------------ 窗口内无异常断言 ------------ */
       case "assertNo": {
         const frames = host.getFrames().slice(ctx.startFrameIndex);
         const checks = step.fields?.map((x) => x.label) ?? [];
@@ -419,9 +536,6 @@ async function runStep(
         if (checks.includes("crc_error")) {
           const bad = frames.filter((x) => x.dir === "rx" && !x.crcOk);
           if (bad.length) problems.push(`${bad.length} 帧 CRC 校验失败`);
-        }
-        if (checks.includes("timeout")) {
-          // 该窗口内本步骤没有等待语义，超时由 expect 步骤负责；这里只做占位校验
         }
         if (checks.includes("unexpected_frame")) {
           const rx = frames.filter((x) => x.dir === "rx");
@@ -432,6 +546,7 @@ async function runStep(
           : finish("pass", { expected: checks.join(" / ") + " 无异常", actual: "无异常" });
       }
 
+      /* ------------ 延时 ------------ */
       case "delay": {
         const ms = parseTimeout(step.detail, 200);
         await sleep(Math.min(ms, 30000));
@@ -446,8 +561,8 @@ async function runStep(
       }
 
       case "parallel": {
-        // 并行下发：把多个字段一次组包发送
         const msg = proto.messages.find((m) => m.id === "status") ?? proto.messages[0];
+        if (!msg) return finish("fail", { error: "未找到报文定义" });
         const values: Record<string, number> = {};
         for (const fld of msg.fields) {
           if (fld.type === "crc" || fld.offset < 0) continue;
@@ -462,20 +577,24 @@ async function runStep(
         return finish("pass", { actual: toHex(bytes), frameHex: toHex(bytes) });
       }
 
+      /* ------------ 变量直接赋值与运算 ------------ */
       case "setVar": {
         const f = step.fields?.[0];
         const name = (f?.label ?? step.detail ?? "").trim();
         const expr = f?.value ?? "";
         if (!name) return finish("fail", { error: "setVar 缺少变量名" });
-        const vars = (ctx as { vars?: Record<string, number> }).vars;
-        const val = evalExpr(expr, vars ?? {});
-        if (val === null) return finish("fail", { error: `无法计算：${name} = ${expr}` });
-        if (vars) vars[name] = val;
+        const val = evalExpr(expr, ctx.vars);
+        if (val === null) {
+          // 如果不是算术运算，直接赋值文本
+          ctx.vars[name] = expr.trim();
+          return finish("pass", { expected: `${name} = ${expr}`, actual: `${name} = "${expr.trim()}"` });
+        }
+        ctx.vars[name] = val;
         return finish("pass", { expected: `${name} = ${expr}`, actual: `${name} = ${val}` });
       }
 
       default:
-        return finish("skip", { error: `步骤类型 ${step.kind} 暂不支持自动执行` });
+        return finish("skip", { error: `步骤类型 ${step.kind} 暂未启用` });
     }
   } catch (e) {
     return finish("fail", { error: (e as Error).message });
@@ -484,7 +603,6 @@ async function runStep(
 
 /* ---------------- 数据驱动（CSV） ---------------- */
 
-/** 解析 CSV（首行表头），返回 [{列名: 值}] */
 export function parseCsv(text?: string): Record<string, string>[] {
   if (!text || !text.trim()) return [];
   const lines = text.trim().split(/\r?\n/).filter((l) => l.trim());
@@ -498,7 +616,6 @@ export function parseCsv(text?: string): Record<string, string>[] {
   });
 }
 
-/** 把步骤里的 ${列名} 换成该行的值 */
 function applyRow(item: CaseItem, row: Record<string, string>): CaseItem {
   const sub = (s?: string): string | undefined => {
     if (!s) return s;
@@ -510,15 +627,17 @@ function applyRow(item: CaseItem, row: Record<string, string>): CaseItem {
       detail: sub(st.detail),
       timeout: sub(st.timeout),
       cond: sub(st.cond),
+      targetVar: sub(st.targetVar),
+      extractRule: sub(st.extractRule),
       fields: st.fields?.map((f) => ({ label: f.label, value: sub(f.value) ?? "" })),
       children: st.children ? walk(st.children) : undefined,
       elseChildren: st.elseChildren ? walk(st.elseChildren) : undefined,
     }));
   return { ...item, steps: walk(item.steps) };
 }
-/* ---------------- 用例 / 套件执行 ---------------- */
 
-/** 单次执行（不含数据驱动） */
+/* ---------------- 执行入口 ---------------- */
+
 async function runOnce(
   host: RunnerHost,
   item: CaseItem,
@@ -530,7 +649,9 @@ async function runOnce(
   const ctx = { startFrameIndex: host.getFrames().length, linkOpen: host.isLinkOpen() };
   const items: StepResult[] = [];
 
-  if (!item.steps.length) {
+  const hasActions = !!(item.actions && item.actions.length > 0);
+  const hasFieldRules = !!(item.fieldRules && item.fieldRules.length > 0);
+  if (!item.steps.length && !hasFieldRules && !hasActions) {
     return {
       id: `run-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
       caseId: item.id,
@@ -565,9 +686,8 @@ async function runOnce(
     if (failed && stopOnFail) break;
     if (r > 0 && gap > 0) await new Promise((res) => setTimeout(res, gap));
 
-    // 变量：第 r 轮的值 = init + step × r（同时作为运行期变量，供 if / while / setVar 使用）
     const row: Record<string, string> = {};
-    const runtimeVars: Record<string, number> = {};
+    const runtimeVars: Record<string, string | number> = {};
     for (const v of vars) {
       const val = v.init + v.step * r;
       row[v.name] = String(val);
@@ -575,6 +695,91 @@ async function runOnce(
     }
     const steps = vars.length ? applyRow(item, row).steps : item.steps;
     const tag = rounds === Infinity ? `[#${r + 1}] ` : rounds > 1 ? `[第${r + 1}轮] ` : "";
+
+    // 多报文任务图形化下发（心跳每秒发送、车辆行走每秒+10米等）
+    if (item.actions && item.actions.length > 0) {
+      const proto = host.getProtocol();
+      for (const act of item.actions) {
+        if (act.enabled === false) continue;
+        const msg = (act.messageId ? proto.messages.find((m) => m.id === act.messageId) : null) ?? proto.messages[0];
+        if (!msg) continue;
+
+        const values: Record<string, number | string | boolean> = {};
+        for (const fld of msg.fields) {
+          if (fld.type === "crc" || fld.offset < 0) continue;
+          values[fld.name] = Number(fld.value ?? 0);
+        }
+        for (const fr of act.fields ?? []) {
+          const curVal = fr.initValue + (fr.step * r);
+          values[fr.fieldName] = curVal;
+          runtimeVars[fr.fieldName] = curVal;
+          row[fr.fieldName] = String(curVal);
+        }
+
+        const bytes = encodeMessage(proto, msg, values);
+        host.pushFrame({ dir: "tx", source: "case", bytes, crcOk: decodeFrame(proto, bytes).crcOk });
+        if (host.isLinkOpen()) {
+          try {
+            await host.write(bytes);
+          } catch {
+            failed = true;
+          }
+        }
+        const displayVals = (act.fields ?? []).map((fr) => `${fr.fieldName}=${values[fr.fieldName]}`).join(", ");
+        items.push({
+          stepId: `${act.id}_r${r}`,
+          kind: "send",
+          text: `${tag}下发「${act.name || msg.name}」`,
+          status: "pass",
+          startedAt: nowTime(),
+          durationMs: 0,
+          expected: displayVals ? `字段: ${displayVals}` : "固定报文",
+          actual: `已发送 ${bytes.length} 字节 [${toHex(bytes)}]`,
+          frameHex: toHex(bytes),
+        });
+      }
+    }
+
+    // 协议字段驱动：每一轮按协议定义自动编码并发送
+    if (item.fieldRules && item.fieldRules.length > 0) {
+      const proto = host.getProtocol();
+      const msg = (item.targetMessageId ? proto.messages.find((m) => m.id === item.targetMessageId) : null) ?? proto.messages[0];
+      if (msg) {
+        const values: Record<string, number | string | boolean> = {};
+        for (const fld of msg.fields) {
+          if (fld.type === "crc" || fld.offset < 0) continue;
+          values[fld.name] = Number(fld.value ?? 0);
+        }
+        for (const fr of item.fieldRules) {
+          const curVal = fr.initValue + (fr.step * r);
+          values[fr.fieldName] = curVal;
+          runtimeVars[fr.fieldName] = curVal;
+          row[fr.fieldName] = String(curVal);
+        }
+        const bytes = encodeMessage(proto, msg, values);
+        host.pushFrame({ dir: "tx", source: "case", bytes, crcOk: decodeFrame(proto, bytes).crcOk });
+        if (host.isLinkOpen()) {
+          try {
+            await host.write(bytes);
+          } catch (e) {
+            failed = true;
+          }
+        }
+        const displayVals = item.fieldRules.map((fr) => `${fr.fieldName}=${values[fr.fieldName]}`).join(", ");
+        items.push({
+          stepId: `proto_round_${r}`,
+          kind: "send",
+          text: `${tag}协议组包下发「${msg.name}」`,
+          status: "pass",
+          startedAt: nowTime(),
+          durationMs: 0,
+          expected: `字段值: ${displayVals}`,
+          actual: `已发送 ${bytes.length} 字节 [${toHex(bytes)}]`,
+          frameHex: toHex(bytes),
+        });
+      }
+    }
+
     const rctx: RunCtx = {
       startFrameIndex: host.getFrames().length,
       linkOpen: ctx.linkOpen,
@@ -585,7 +790,7 @@ async function runOnce(
     };
 
     const before = items.length;
-    const ctrl = await runList(host, steps, rctx, items, tag);
+    const ctrl = steps.length ? await runList(host, steps, rctx, items, tag) : "ok";
     for (let i = before; i < items.length; i++) onStep?.(item.id, i - before, items[i]);
     if (ctrl === "fail") {
       failed = true;
@@ -593,10 +798,9 @@ async function runOnce(
     }
     if (timedOut) break;
     if (failed && stopOnFail) break;
-    if (items.length > 50000) break; // 无限循环时防内存爆掉
+    if (items.length > 50000) break;
   }
 
-  // 压测统计：发多少 / 收多少 / 丢多少 / 平均响应
   const runFrames = host.getFrames().slice(runStart);
   const txFrames = runFrames.filter((f) => f.dir === "tx");
   const rxFrames = runFrames.filter((f) => f.dir === "rx");
@@ -614,7 +818,7 @@ async function runOnce(
   };
 
   const failItem = items.find((x) => x.status === "fail");
-  const autoStop = timedOut ? `达到最长运行时长 ${Math.round(maxDuration / 1000)}s，已自动停止` : "";
+  const autoStop = timedOut ? `已达到最长运行时长 ${Math.round(maxDuration / 1000)}s` : "";
   return {
     id: `run-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
     caseId: item.id,
@@ -630,7 +834,7 @@ async function runOnce(
       : autoStop || undefined,
   };
 }
-/** 有 CSV 数据就按行跑，全部通过才算通过 */
+
 export async function runCase(
   host: RunnerHost,
   item: CaseItem,

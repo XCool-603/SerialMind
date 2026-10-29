@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { appendChecksum, decodeFrame, encodeMessage } from "./codec";
 import { BINARY_PROTOCOL, CRANE_PROTOCOL, RAW_PROTOCOL, templateById, type PdlProtocol } from "./pdl";
-import { parseHex } from "./bytes";
+import { parseHex, stringToBytes } from "./bytes";
 import { initDb } from "./db";
 import { appendRun, clearRunsTable, isEmpty, loadRuns, loadWorkspace, persist, uuid } from "./repo";
 import { loadHealth, saveHealth, loadHistory, pushHistory, clearHistory, type HealthRecord } from "./health";
@@ -21,6 +21,7 @@ import type {
   StepResult,
   SubProductItem,
   SuiteItem,
+  QuickSendItem,
   ViewKey,
   ViewMode,
 } from "./types";
@@ -39,13 +40,14 @@ export type {
   StepResult,
   SubProductItem,
   SuiteItem,
+  QuickSendItem,
   ViewKey,
   ViewMode,
 };
 
 export type DbStatus = "loading" | "ready" | "error";
 
-const VIEW_KEYS: ViewKey[] = ["terminal", "protocol", "rule", "case", "suite", "report", "role"];
+const VIEW_KEYS: ViewKey[] = ["terminal", "protocol", "case", "report"];
 function initialView(): ViewKey {
   if (typeof window === "undefined") return "terminal";
   const h = window.location.hash.replace("#", "") as ViewKey;
@@ -256,7 +258,61 @@ interface State {
   setHealth: (rec: Omit<HealthRecord, "version">) => void;
   setCaseTab: (v: "cases" | "suites") => void;
   clearAcceptanceHistory: () => void;
+  // SSCom 风格发送与终端模式
+  sendMode: "hex" | "text";
+  setSendMode: (m: "hex" | "text") => void;
+  sendNewline: boolean;
+  setSendNewline: (v: boolean) => void;
+  clearOnSend: boolean;
+  setClearOnSend: (v: boolean) => void;
+  periodSend: boolean;
+  periodMs: number;
+  setPeriodMs: (ms: number) => void;
+  togglePeriodSend: () => void;
+  termViewMode: "stream" | "table";
+  setTermViewMode: (m: "stream" | "table") => void;
+  showTimestamp: boolean;
+  setShowTimestamp: (v: boolean) => void;
+  autoScroll: boolean;
+  setAutoScroll: (v: boolean) => void;
+  resetCounters: () => void;
+  quickSends: QuickSendItem[];
+  addQuickSend: (item?: Partial<QuickSendItem>) => void;
+  updateQuickSend: (id: string, patch: Partial<QuickSendItem>) => void;
+  deleteQuickSend: (id: string) => void;
+  loopingQuick: boolean;
+  loopIntervalMs: number;
+  setLoopIntervalMs: (ms: number) => void;
+  toggleLoopQuickSend: () => void;
+  currentLoopIndex: number;
 }
+
+const DEFAULT_QUICK_SENDS: QuickSendItem[] = [
+  { id: "qs1", enabled: true, hex: false, content: "AT", note: "AT 测试握手" },
+  { id: "qs2", enabled: true, hex: false, content: "AT+CSQ", note: "查询信号强度" },
+  { id: "qs3", enabled: false, hex: false, content: "AT+GMR", note: "固件版本查询" },
+  { id: "qs4", enabled: false, hex: true, content: "01 03 00 00 00 02 C4 0B", note: "Modbus 读保持寄存器" },
+  { id: "qs5", enabled: false, hex: true, content: "01 06 00 01 00 01 19 CA", note: "Modbus 写单个寄存器" },
+];
+
+function loadQuickSends(): QuickSendItem[] {
+  if (typeof window === "undefined") return DEFAULT_QUICK_SENDS;
+  try {
+    const raw = localStorage.getItem("serialmind_quick_sends");
+    if (raw) return JSON.parse(raw);
+  } catch {}
+  return DEFAULT_QUICK_SENDS;
+}
+
+function saveQuickSends(items: QuickSendItem[]) {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem("serialmind_quick_sends", JSON.stringify(items));
+  } catch {}
+}
+
+let periodTimer: ReturnType<typeof setInterval> | null = null;
+let loopQuickTimer: ReturnType<typeof setInterval> | null = null;
 
 const buckets: Record<string, Bucket> = {};
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
@@ -378,6 +434,18 @@ export const useStore = create<State>((set, get) => {
     rxCount: 0,
     txCount: 0,
     totalFrames: 0,
+    sendMode: "text",
+    sendNewline: true,
+    clearOnSend: false,
+    periodSend: false,
+    periodMs: 1000,
+    termViewMode: "stream",
+    showTimestamp: true,
+    autoScroll: true,
+    quickSends: loadQuickSends(),
+    loopingQuick: false,
+    loopIntervalMs: 200,
+    currentLoopIndex: -1,
     roundTripFailed: false,
     showRoundTripModal:
       typeof window !== "undefined" && new URLSearchParams(window.location.search).get("modal") === "1",
@@ -688,6 +756,18 @@ export const useStore = create<State>((set, get) => {
         rxCount: 0,
         txCount: 0,
         totalFrames: 0,
+    sendMode: "text",
+    sendNewline: true,
+    clearOnSend: false,
+    periodSend: false,
+    periodMs: 1000,
+    termViewMode: "stream",
+    showTimestamp: true,
+    autoScroll: true,
+    quickSends: loadQuickSends(),
+    loopingQuick: false,
+    loopIntervalMs: 200,
+    currentLoopIndex: -1,
         serialMsg: `已切换到「${s.products.find((p) => p.id === id)?.name ?? id}」`,
       });
     },
@@ -1155,7 +1235,7 @@ export const useStore = create<State>((set, get) => {
 
     /* ---------- UI ---------- */
     // 兼容旧入口：setView("suite") 现在落到「测试 → 套件」
-  setView: (v) => (v === "suite" ? set({ activeView: "case", caseTab: "suites" }) : set({ activeView: v })),
+    setView: (v) => set({ activeView: v }),
     setFilter: (f) => set({ filter: f }),
     setViewMode: (m) => set({ viewMode: m }),
     setInspectorTab: (t) => set({ inspectorTab: t }),
@@ -1183,33 +1263,146 @@ export const useStore = create<State>((set, get) => {
         if (s.paused) return {};
         const fr = mkFrame(f);
         const next = [...s.frames, fr];
+        const bLen = fr.bytes.length;
         return {
-          frames: next.length > 2000 ? next.slice(next.length - 2000) : next,
-          rxCount: s.rxCount + (fr.dir === "rx" ? 1 : 0),
-          txCount: s.txCount + (fr.dir === "tx" ? 1 : 0),
+          frames: next.length > 2500 ? next.slice(next.length - 2500) : next,
+          rxCount: s.rxCount + (fr.dir === "rx" ? bLen : 0),
+          txCount: s.txCount + (fr.dir === "tx" ? bLen : 0),
           totalFrames: s.totalFrames + 1,
           selectedFrameId: s.selectedFrameId ?? fr.id,
         };
       }),
     sendCurrent: () => {
       const s = get();
-      let bytes = parseHex(s.sendInput);
-      if (!bytes.length) {
-        set({ serialMsg: "发送内容为空或不是合法十六进制" });
+      if (!s.sendInput.trim()) {
+        set({ serialMsg: "发送内容为空" });
         return;
       }
-      // 自动补校验和：只在这帧还不合法时才补（已带校验的帧不再重复追加）
-      if (s.autoChecksum) {
-        const proto = s.protocols.find((p) => p.id === s.activeProtocolId) ?? RAW_PROTOCOL;
-        const alg = s.checksumAlgorithm || proto.checksum.algorithm;
-        const probe = decodeFrame(proto, bytes);
-        if (!(probe.matched && probe.crcOk)) {
-          const before = bytes.length;
-          bytes = appendChecksum(proto, bytes, alg);
-          set({ serialMsg: `已自动补 ${alg}（${before} → ${bytes.length} 字节）` });
+      let bytes: number[] = [];
+      if (s.sendMode === "text") {
+        let text = s.sendInput;
+        if (s.sendNewline && !text.endsWith("\r\n")) {
+          text += "\r\n";
+        }
+        bytes = stringToBytes(text, true);
+      } else {
+        let hexStr = s.sendInput;
+        if (s.sendNewline) {
+          hexStr += " 0D 0A";
+        }
+        bytes = parseHex(hexStr);
+        if (!bytes.length) {
+          set({ serialMsg: "发送内容不是合法的十六进制" });
+          return;
+        }
+        if (s.autoChecksum) {
+          const proto = s.protocols.find((p) => p.id === s.activeProtocolId) ?? RAW_PROTOCOL;
+          const alg = s.checksumAlgorithm || proto.checksum.algorithm;
+          const probe = decodeFrame(proto, bytes);
+          if (!(probe.matched && probe.crcOk)) {
+            const before = bytes.length;
+            bytes = appendChecksum(proto, bytes, alg);
+            set({ serialMsg: `已自动补 ${alg}（${before} → ${bytes.length} 字节）` });
+          }
         }
       }
       void s.sendBytes(bytes, "manual");
+      if (s.clearOnSend) {
+        set({ sendInput: "" });
+      }
+    },
+    setSendMode: (m) => set({ sendMode: m }),
+    setSendNewline: (v) => set({ sendNewline: v }),
+    setClearOnSend: (v) => set({ clearOnSend: v }),
+    setPeriodMs: (ms) => set({ periodMs: Math.max(10, ms) }),
+    togglePeriodSend: () => {
+      const s = get();
+      if (s.periodSend) {
+        if (periodTimer) clearInterval(periodTimer);
+        periodTimer = null;
+        set({ periodSend: false, serialMsg: "已停止定时发送" });
+      } else {
+        if (periodTimer) clearInterval(periodTimer);
+        periodTimer = setInterval(() => {
+          get().sendCurrent();
+        }, Math.max(20, s.periodMs));
+        set({ periodSend: true, serialMsg: `已开启定时发送（每 ${s.periodMs}ms）` });
+      }
+    },
+    setTermViewMode: (m) => set({ termViewMode: m }),
+    setShowTimestamp: (v) => set({ showTimestamp: v }),
+    setAutoScroll: (v) => set({ autoScroll: v }),
+    resetCounters: () => set({ rxCount: 0, txCount: 0, totalFrames: 0 }),
+    addQuickSend: (item) => {
+      const s = get();
+      const newItem: QuickSendItem = {
+        id: `qs_${Date.now()}_${Math.random().toString(16).slice(2, 6)}`,
+        enabled: true,
+        hex: false,
+        content: "AT",
+        note: "快捷指令",
+        ...item,
+      };
+      const next = [...s.quickSends, newItem];
+      set({ quickSends: next });
+      saveQuickSends(next);
+    },
+    updateQuickSend: (id, patch) => {
+      const s = get();
+      const next = s.quickSends.map((q) => (q.id === id ? { ...q, ...patch } : q));
+      set({ quickSends: next });
+      saveQuickSends(next);
+    },
+    deleteQuickSend: (id) => {
+      const s = get();
+      const next = s.quickSends.filter((q) => q.id !== id);
+      set({ quickSends: next });
+      saveQuickSends(next);
+    },
+    setLoopIntervalMs: (ms) => set({ loopIntervalMs: Math.max(10, ms) }),
+    toggleLoopQuickSend: () => {
+      const s = get();
+      if (s.loopingQuick) {
+        if (loopQuickTimer) clearInterval(loopQuickTimer);
+        loopQuickTimer = null;
+        set({ loopingQuick: false, currentLoopIndex: -1, serialMsg: "已停止快捷轮询" });
+      } else {
+        const enabled = s.quickSends.filter((q) => q.enabled && q.content.trim());
+        if (!enabled.length) {
+          set({ serialMsg: "没有勾选任何快捷指令" });
+          return;
+        }
+        let idx = 0;
+        set({ loopingQuick: true, currentLoopIndex: 0, serialMsg: `开始循环轮询 ${enabled.length} 条指令` });
+        if (loopQuickTimer) clearInterval(loopQuickTimer);
+        loopQuickTimer = setInterval(() => {
+          const curS = get();
+          const list = curS.quickSends.filter((q) => q.enabled && q.content.trim());
+          if (!list.length || !curS.loopingQuick) {
+            if (loopQuickTimer) clearInterval(loopQuickTimer);
+            loopQuickTimer = null;
+            set({ loopingQuick: false, currentLoopIndex: -1 });
+            return;
+          }
+          if (idx >= list.length) idx = 0;
+          const item = list[idx];
+          set({ currentLoopIndex: idx });
+          let bytes: number[] = [];
+          if (item.hex) {
+            let h = item.content;
+            if (curS.sendNewline) h += " 0D 0A";
+            bytes = parseHex(h);
+          } else {
+            let t = item.content;
+            if (curS.sendNewline && !t.endsWith("\r\n")) t += "\r\n";
+            bytes = stringToBytes(t, true);
+          }
+          if (bytes.length) {
+            void curS.sendBytes(bytes, "period");
+          }
+          idx++;
+        }, Math.max(20, s.loopIntervalMs));
+      }
     },
     setRoundTripFailed: (v) => set({ roundTripFailed: v }),
     setShowRoundTripModal: (v) => set({ showRoundTripModal: v }),

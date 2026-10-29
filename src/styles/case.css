@@ -493,3 +493,203 @@
   color: var(--t3);
   line-height: 1.5;
 }
+
+.kind-assert {
+  background: #2a1f3d;
+  color: #c084fc;
+}
+.kind-extract {
+  background: #2e2610;
+  color: #fbbf24;
+}
+
+/* Apifox 风格执行卡片 */
+.apifox-step-card {
+  border: 1px solid var(--line-2);
+  border-radius: 6px;
+  background: #0f141c;
+  padding: 8px 10px;
+  margin-bottom: 6px;
+  font-size: 11px;
+}
+.apifox-step-card.pass {
+  border-left: 3px solid var(--green);
+}
+.apifox-step-card.fail {
+  border-left: 3px solid var(--red);
+}
+.apifox-step-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 500;
+}
+.apifox-step-detail {
+  margin-top: 6px;
+  padding: 6px 8px;
+  background: #070a0f;
+  border-radius: 4px;
+  font-family: var(--font-mono, monospace);
+  font-size: 10px;
+  color: #8b949e;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.apifox-extracted {
+  color: #fbbf24;
+  font-weight: 600;
+}
+
+/* 协议字段驱动用例面板 */
+.proto-case-panel {
+  border: 1px solid var(--line-2);
+  border-radius: 8px;
+  background: var(--bg-panel-2);
+  margin-bottom: 12px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.proto-case-head {
+  height: 38px;
+  padding: 0 14px;
+  background: var(--bg-panel-3);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-bottom: 1px solid var(--line-2);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--t1);
+}
+.proto-case-body {
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.proto-field-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+.proto-field-table th {
+  text-align: left;
+  padding: 6px 8px;
+  background: rgba(0, 0, 0, 0.2);
+  color: var(--t3);
+  font-weight: 500;
+  border-bottom: 1px solid var(--line-2);
+}
+.proto-field-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--line-3);
+  color: var(--t1);
+}
+.proto-input {
+  height: 22px;
+  background: #090d14;
+  border: 1px solid var(--line-2);
+  border-radius: 4px;
+  padding: 0 6px;
+  color: #fff;
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+}
+.hex-preview-box {
+  padding: 8px 10px;
+  background: #090d14;
+  border-radius: 6px;
+  border: 1px dashed var(--line-2);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-family: var(--font-mono, monospace);
+  font-size: 10px;
+  color: #8b949e;
+}
+.hex-preview-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.hex-code {
+  color: #58a6ff;
+  font-weight: 600;
+}
+
+/* 多任务动作卡片 */
+.action-task-card {
+  border: 1px solid var(--line-2);
+  border-radius: 8px;
+  background: var(--bg-panel-2);
+  margin-bottom: 12px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.2);
+}
+.action-task-card.disabled {
+  opacity: 0.6;
+  filter: grayscale(0.6);
+}
+.action-task-head {
+  padding: 8px 12px;
+  background: var(--bg-panel-3);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-bottom: 1px solid var(--line-2);
+  font-size: 12px;
+}
+.action-task-body {
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.quick-preset-banner {
+  padding: 12px 16px;
+  background: linear-gradient(135deg, rgba(30, 58, 102, 0.4) 0%, rgba(13, 22, 38, 0.6) 100%);
+  border: 1px solid rgba(88, 166, 255, 0.3);
+  border-radius: 8px;
+  margin-bottom: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.quick-preset-banner .title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #fff;
+  margin-bottom: 3px;
+}
+.quick-preset-banner .desc {
+  font-size: 11px;
+  color: var(--t3);
+}
+.action-add-btn {
+  width: 100%;
+  padding: 10px;
+  border: 1px dashed var(--line-2);
+  border-radius: 8px;
+  background: rgba(255,255,255,0.02);
+  color: var(--t2);
+  font-size: 12px;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  cursor: pointer;
+  transition: all 0.2s;
+  margin-bottom: 14px;
+}
+.action-add-btn:hover {
+  background: rgba(88, 166, 255, 0.08);
+  border-color: var(--accent);
+  color: #fff;
+}
+

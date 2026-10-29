@@ -124,6 +124,16 @@ function leaf(kind: string, rest: string, no: number, errors: string[]): CaseSte
       return { id, kind: "break", text: "break", detail: "" };
     case "continue":
       return { id, kind: "continue", text: "continue", detail: "" };
+    case "assert": {
+      const val = rest.replace(/^["']|["']$/g, "").trim();
+      return { id, kind: "assert", text: "断言", fields: [{ label: "contains", value: val }] };
+    }
+    case "extract": {
+      const m = rest.match(/^([A-Za-z_]\w*)\s*=\s*(.+)$/);
+      const vName = m ? m[1] : "val";
+      const rule = m ? m[2].trim() : rest;
+      return { id, kind: "extract", text: "提取变量", targetVar: vName, extractType: "regex", extractRule: rule, fields: [{ label: vName, value: rule }] };
+    }
     default:
       errors.push(`第 ${no} 行类型不支持：${kind}（${KIND_HINT}）`);
       return null;
@@ -180,7 +190,7 @@ function block(lines: Line[], start: number, indent: number, errors: string[], d
       while (i < lines.length && lines[i].indent > indent) {
         const sub = lines[i];
         const key = sub.text.replace(/:$/, "").trim();
-        if (key === "then" || key === "do" || key === "else") {
+        if (key === "then" || key === "do" || key === "else" || key === "children" || key === "steps") {
           i++;
           if (i >= lines.length || lines[i].indent <= sub.indent) {
             // 空块

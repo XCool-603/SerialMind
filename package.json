@@ -44,6 +44,7 @@
     "test:repeat": "node scripts/test-repeat.mjs",
     "test:stress": "node scripts/test-stress.mjs",
     "test:frame:ui": "node scripts/test-frame3-ui.mjs",
+    "test:user-scenario": "tsx scripts/test-user-scenario.ts",
     "demo": "node scripts/demo.mjs"
   },
   "dependencies": {
