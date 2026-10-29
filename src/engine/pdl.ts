@@ -214,7 +214,55 @@ export const CRANE_PROTOCOL: PdlProtocol = {
   ],
 };
 
+export const HEARTBEAT_PROTOCOL: PdlProtocol = {
+  id: "proto-heartbeat",
+  name: "心跳协议",
+  version: "v1",
+  framing: { mode: "silence-gap", gapMs: 20 },
+  checksum: { algorithm: "CRC16/MODBUS", from: 0, to: "len-2", endian: "little" },
+  sampleFrame: "01 01 00 01 91 D8",
+  updatedAt: "刚刚",
+  messages: [
+    {
+      id: "heartbeat",
+      name: "心跳帧",
+      fields: [
+        F({ name: "addr", type: "uint", size: 1, offset: 0, value: 1, desc: "从站地址" }),
+        F({ name: "func", type: "enum", size: 1, offset: 1, value: 0x01, desc: "心跳指令", enumMap: { 0x01: "心跳保活" } }),
+        F({ name: "seq", type: "uint", size: 2, offset: 2, byteOrder: "ABCD", value: 1, desc: "心跳序号" }),
+        F({ name: "crc16", type: "crc", size: 2, offset: 4, byteOrder: "BADC", desc: "CRC16校验" }),
+      ],
+    },
+  ],
+};
+
+export const VEHICLE_WALK_PROTOCOL: PdlProtocol = {
+  id: "proto-vehicle-walk",
+  name: "车辆行走协议",
+  version: "v1",
+  framing: { mode: "silence-gap", gapMs: 20 },
+  checksum: { algorithm: "CRC16/MODBUS", from: 0, to: "len-2", endian: "little" },
+  sampleFrame: "01 02 00 00 00 14 00 64 E3 E8",
+  updatedAt: "刚刚",
+  messages: [
+    {
+      id: "vehicle_walk",
+      name: "车辆行驶状态帧",
+      fields: [
+        F({ name: "addr", type: "uint", size: 1, offset: 0, value: 1, desc: "从站地址" }),
+        F({ name: "func", type: "enum", size: 1, offset: 1, value: 0x02, desc: "行驶状态上报", enumMap: { 0x02: "行驶状态" } }),
+        F({ name: "distance", type: "uint", size: 2, offset: 2, byteOrder: "ABCD", value: 0, desc: "行走距离 (米)", unit: "m" }),
+        F({ name: "speed", type: "uint", size: 2, offset: 4, byteOrder: "ABCD", value: 20, desc: "当前车速 (km/h)", unit: "km/h" }),
+        F({ name: "score", type: "uint", size: 2, offset: 6, byteOrder: "ABCD", value: 100, desc: "车辆得分", unit: "分" }),
+        F({ name: "crc16", type: "crc", size: 2, offset: 8, byteOrder: "BADC", desc: "CRC16校验" }),
+      ],
+    },
+  ],
+};
+
 export const SAMPLE_PROTOCOLS: PdlProtocol[] = [
+  HEARTBEAT_PROTOCOL,
+  VEHICLE_WALK_PROTOCOL,
   CRANE_PROTOCOL,
   {
     ...CRANE_PROTOCOL,

@@ -1,16 +1,17 @@
 import { runCase, type RunnerHost } from "../src/engine/runner";
-import { CRANE_PROTOCOL } from "../src/engine/pdl";
+import { HEARTBEAT_PROTOCOL, VEHICLE_WALK_PROTOCOL } from "../src/engine/pdl";
 import { toHex } from "../src/engine/bytes";
 import type { CaseItem, Frame } from "../src/engine/types";
 
 async function main() {
-  console.log("=== 验证用户场景：免代码图形化配置（心跳每秒发送 + 车辆行走每秒+10米） ===");
+  console.log("=== 验证用户场景：用例直接从「我添加的协议」中选（心跳协议 + 车辆行走协议） ===");
 
   const txBytesList: number[][] = [];
   const frames: Frame[] = [];
 
   const host: RunnerHost = {
-    getProtocol: () => CRANE_PROTOCOL,
+    getProtocol: () => HEARTBEAT_PROTOCOL,
+    getAllProtocols: () => [HEARTBEAT_PROTOCOL, VEHICLE_WALK_PROTOCOL],
     getFrames: () => frames,
     pushFrame: (f) => {
       const frame: Frame = {
@@ -23,14 +24,12 @@ async function main() {
       frames.push(frame);
       if (f.dir === "tx") txBytesList.push(f.bytes);
     },
-    write: async (b) => {
-      // 模拟写入硬件
-    },
+    write: async (_b) => {},
     isLinkOpen: () => true,
     autoChecksum: () => true,
   };
 
-  // 用户在图形界面中配置的用例数据结构
+  // 用户在图形界面中配置的用例：每个动作直接绑定用户添加的协议
   const testCase: CaseItem = {
     id: "case-user-scenario",
     subProductId: "sp-crane",
@@ -44,13 +43,13 @@ async function main() {
     steps: [],
     yaml: "",
     repeat: 3, // 运行 3 轮
-    intervalMs: 10, // 测试中加速
-    // 界面中的多任务配置：
+    intervalMs: 10,
+    // 动作 1：选择「心跳协议」；动作 2：选择「车辆行走协议」
     actions: [
       {
         id: "act-heartbeat",
-        name: "每秒发送心跳保活",
-        messageId: "heartbeat",
+        name: "每秒发送心跳",
+        protocolId: HEARTBEAT_PROTOCOL.id, // 从添加的协议中选
         intervalMs: 1000,
         enabled: true,
         fields: [
@@ -62,21 +61,21 @@ async function main() {
       {
         id: "act-vehicle-walk",
         name: "每秒车辆行走+10米",
-        messageId: "vehicle_status",
+        protocolId: VEHICLE_WALK_PROTOCOL.id, // 从添加的协议中选
         intervalMs: 1000,
         enabled: true,
         fields: [
           { fieldName: "addr", initValue: 1, step: 0 },
           { fieldName: "func", initValue: 2, step: 0 },
           { fieldName: "distance", initValue: 0, step: 10 }, // 距离每秒 +10
-          { fieldName: "speed", initValue: 20, step: 0 },   // 速度保持 20km/h
-          { fieldName: "score", initValue: 100, step: 0 },  // 分数保持 100
+          { fieldName: "speed", initValue: 20, step: 0 },
+          { fieldName: "score", initValue: 100, step: 0 },
         ],
       },
     ],
   };
 
-  const result = await runCase(host, testCase, "免代码用例执行");
+  const result = await runCase(host, testCase, "多协议下发执行");
 
   console.log(`执行状态: ${result.status}`);
   console.log(`执行步骤数: ${result.items.length}`);
@@ -86,42 +85,40 @@ async function main() {
     process.exit(1);
   }
 
-  // 验证共发出了 3 轮 * 2 个动作 = 6 帧数据
+  // 验证共发出了 3 轮 * 2 个协议 = 6 帧数据
   if (txBytesList.length !== 6) {
     console.error(`期望发出 6 帧，实际发出 ${txBytesList.length} 帧`);
     process.exit(1);
   }
 
   // 轮次 1:
-  // 帧 0: 心跳包 seq=1
-  console.log(`[第1轮] 心跳: ${toHex(txBytesList[0])}`);
-  // 帧 1: 车辆行走 distance=0, speed=20, score=100
-  console.log(`[第1轮] 行走: ${toHex(txBytesList[1])}`);
+  console.log(`[第1轮] 心跳协议帧: ${toHex(txBytesList[0])}`);
+  console.log(`[第1轮] 行走协议帧: ${toHex(txBytesList[1])}`);
 
   // 轮次 2:
-  // 帧 2: 心跳包 seq=1
-  console.log(`[第2轮] 心跳: ${toHex(txBytesList[2])}`);
-  // 帧 3: 车辆行走 distance=10, speed=20, score=100
-  console.log(`[第2轮] 行走: ${toHex(txBytesList[3])}`);
+  console.log(`[第2轮] 心跳协议帧: ${toHex(txBytesList[2])}`);
+  console.log(`[第2轮] 行走协议帧: ${toHex(txBytesList[3])}`);
 
   // 轮次 3:
-  // 帧 4: 心跳包 seq=1
-  console.log(`[第3轮] 心跳: ${toHex(txBytesList[4])}`);
-  // 帧 5: 车辆行走 distance=20, speed=20, score=100
-  console.log(`[第3轮] 行走: ${toHex(txBytesList[5])}`);
+  console.log(`[第3轮] 心跳协议帧: ${toHex(txBytesList[4])}`);
+  console.log(`[第3轮] 行走协议帧: ${toHex(txBytesList[5])}`);
 
   // 检查距离字段是否有变化
   const d0 = (txBytesList[1][2] << 8) | txBytesList[1][3];
   const d1 = (txBytesList[3][2] << 8) | txBytesList[3][3];
   const d2 = (txBytesList[5][2] << 8) | txBytesList[5][3];
 
-  console.log(`验证距离变化: 第1轮=${d0}米, 第2轮=${d1}米, 第3轮=${d2}米`);
+  console.log(`验证行走协议距离变化: 第1轮=${d0}米, 第2轮=${d1}米, 第3轮=${d2}米`);
 
-  if (d0 === 0 && d1 === 10 && d2 === 20) {
-    console.log("✓ 距离完全按照用户设定的每秒+10米正确递增且完成了自动封包与CRC16校验！");
+  // 验证终端帧记录的协议名称
+  const pNames = frames.map((f) => f.protocolName);
+  console.log(`终端显示的协议名称: ${JSON.stringify(pNames)}`);
+
+  if (d0 === 0 && d1 === 10 && d2 === 20 && pNames[0] === "心跳协议" && pNames[1] === "车辆行走协议") {
+    console.log("✓ 两个独立添加的协议下发成功，距离每秒+10米递增，终端完全识别并显示对应的协议名称！");
     console.log("=== 全部场景验证通过 ===");
   } else {
-    console.error(`距离递增错误: d0=${d0}, d1=${d1}, d2=${d2}`);
+    console.error("验证未全部通过！");
     process.exit(1);
   }
 }

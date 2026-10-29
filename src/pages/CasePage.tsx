@@ -2,12 +2,12 @@ import { useMemo, useState } from "react";
 import { encodeMessage } from "../engine/codec";
 import { toHex } from "../engine/bytes";
 import { useStore } from "../engine/store";
-import type { CasePacketAction, FieldActionRule, CaseStep, StepKind } from "../engine/types";
-import type { PdlProtocol } from "../engine/pdl";
+import type { CasePacketAction, FieldActionRule, CaseStep } from "../engine/types";
+import { HEARTBEAT_PROTOCOL, VEHICLE_WALK_PROTOCOL, type PdlProtocol } from "../engine/pdl";
 import { Icon, IC } from "../components/Icon";
 import { EmptyState } from "../components/Empty";
 
-/** 实时计算某个报文动作在第 round 轮的组包 HEX 与展示 */
+/** 实时计算某个协议动作在第 round 轮的组包 HEX 与展示 */
 function computeActionPreview(proto: PdlProtocol | undefined, action: CasePacketAction, round: number) {
   if (!proto) return { hex: "—", len: 0, valSummary: "" };
   const msg = (action.messageId ? proto.messages.find((m) => m.id === action.messageId) : null) ?? proto.messages[0];
@@ -41,7 +41,6 @@ export function CasePage() {
     cases,
     subProducts,
     protocols,
-    activeProtocolId,
     activeCaseId,
     setActiveCase,
     createCase,
@@ -59,7 +58,6 @@ export function CasePage() {
   const [tagFilter, setTagFilter] = useState("全部");
 
   const active = cases.find((c) => c.id === activeCaseId) ?? cases[0];
-  const proto = protocols.find((p) => p.id === activeProtocolId) ?? protocols[0];
 
   // 过滤后的用例列表
   const filtered = useMemo(() => {
@@ -73,17 +71,19 @@ export function CasePage() {
   // 当前用例最近一次执行结果
   const lastRun = runs.find((r) => r.caseId === active?.id);
 
-  // 初始化或提取当前用例的任务动作列表
+  // 初始化或提取当前用例的任务动作列表（每个动作绑定用户添加的一个协议）
   const actions: CasePacketAction[] = useMemo(() => {
     if (active?.actions && active.actions.length > 0) return active.actions;
     // 兼容老版本的 fieldRules
-    if (active?.fieldRules && active.fieldRules.length > 0 && proto?.messages?.[0]) {
-      const msg = proto.messages.find((m) => m.id === active.targetMessageId) ?? proto.messages[0];
+    if (active?.fieldRules && active.fieldRules.length > 0 && protocols[0]) {
+      const p = protocols[0];
+      const msg = p.messages[0];
       return [
         {
           id: "act-legacy",
-          name: `下发「${msg.name}」`,
-          messageId: msg.id,
+          name: `下发「${p.name}」`,
+          protocolId: p.id,
+          messageId: msg?.id,
           intervalMs: active.intervalMs ?? 1000,
           enabled: true,
           fields: active.fieldRules.map((r) => ({ fieldName: r.fieldName, initValue: r.initValue, step: r.step })),
@@ -91,7 +91,7 @@ export function CasePage() {
       ];
     }
     return [];
-  }, [active?.actions, active?.fieldRules, active?.targetMessageId, active?.intervalMs, proto]);
+  }, [active?.actions, active?.fieldRules, active?.intervalMs, protocols]);
 
   // 更新当前用例动作列表
   const saveActions = (newActions: CasePacketAction[]) => {
@@ -99,22 +99,29 @@ export function CasePage() {
     updateCase(active.id, { actions: newActions });
   };
 
-  // 添加一个新的报文任务卡片
-  const handleAddAction = (msgId?: string) => {
-    if (!proto || !proto.messages.length) return;
-    const targetMsg = msgId ? proto.messages.find((m) => m.id === msgId) ?? proto.messages[0] : proto.messages[0];
-    const initialFields: FieldActionRule[] = targetMsg.fields
-      .filter((f) => f.type !== "crc" && f.offset >= 0)
-      .map((f) => ({
-        fieldName: f.name,
-        initValue: Number(f.value ?? 0),
-        step: 0,
-      }));
+  // 添加一个新的协议下发任务卡片（从用户添加的协议中选）
+  const handleAddAction = (protoId?: string) => {
+    if (!protocols.length) {
+      void import("../lib/actions").then((m) => m.newProtocol());
+      return;
+    }
+    const targetProto = protoId ? protocols.find((p) => p.id === protoId) ?? protocols[0] : (protocols[actions.length % protocols.length] ?? protocols[0]);
+    const targetMsg = targetProto.messages[0];
+    const initialFields: FieldActionRule[] = targetMsg
+      ? targetMsg.fields
+          .filter((f) => f.type !== "crc" && f.offset >= 0)
+          .map((f) => ({
+            fieldName: f.name,
+            initValue: Number(f.value ?? 0),
+            step: 0,
+          }))
+      : [];
 
     const newAct: CasePacketAction = {
       id: `act_${Date.now()}`,
-      name: `下发${targetMsg.name}`,
-      messageId: targetMsg.id,
+      name: `下发「${targetProto.name}」`,
+      protocolId: targetProto.id,
+      messageId: targetMsg?.id,
       intervalMs: active.intervalMs ?? 1000,
       enabled: true,
       fields: initialFields,
@@ -122,19 +129,37 @@ export function CasePage() {
     saveActions([...actions, newAct]);
   };
 
-  // 一键预设用户要求场景：心跳每秒发送 + 车辆行走每秒+10米
+  // 一键预设用户场景：从添加的协议中选「心跳协议」与「车辆行走协议」
   const loadHeartbeatAndMovePreset = () => {
-    if (!proto) return;
-    const heartbeatMsg = proto.messages.find((m) => m.id === "heartbeat") ?? proto.messages[0];
-    const vehicleMsg = proto.messages.find((m) => m.id === "vehicle_status") ?? proto.messages[1] ?? proto.messages[0];
+    let heartbeatProto = protocols.find((p) => p.name.includes("心跳") || p.id === "proto-heartbeat");
+    let vehicleProto = protocols.find((p) => p.name.includes("行走") || p.name.includes("车辆") || p.id === "proto-vehicle-walk");
+
+    // 如果还没有这两个协议，自动补充到协议列表中供用户管理
+    const storeState = useStore.getState();
+    const newProtocols = [...protocols];
+    if (!heartbeatProto) {
+      heartbeatProto = { ...HEARTBEAT_PROTOCOL, productId: storeState.activeProductId, subProductId: storeState.activeSubProductId };
+      newProtocols.push(heartbeatProto);
+    }
+    if (!vehicleProto) {
+      vehicleProto = { ...VEHICLE_WALK_PROTOCOL, productId: storeState.activeProductId, subProductId: storeState.activeSubProductId };
+      newProtocols.push(vehicleProto);
+    }
+    if (newProtocols.length > protocols.length) {
+      useStore.setState({ protocols: newProtocols });
+    }
+
+    const hbMsg = heartbeatProto.messages[0];
+    const vmMsg = vehicleProto.messages[0];
 
     const act1: CasePacketAction = {
       id: `act_hb_${Date.now()}`,
       name: "每秒发送心跳保活",
-      messageId: heartbeatMsg.id,
+      protocolId: heartbeatProto.id,
+      messageId: hbMsg?.id,
       intervalMs: 1000,
       enabled: true,
-      fields: heartbeatMsg.fields
+      fields: (hbMsg?.fields ?? [])
         .filter((f) => f.type !== "crc" && f.offset >= 0)
         .map((f) => ({
           fieldName: f.name,
@@ -146,10 +171,11 @@ export function CasePage() {
     const act2: CasePacketAction = {
       id: `act_move_${Date.now() + 1}`,
       name: "每秒车辆行走+10米",
-      messageId: vehicleMsg.id,
+      protocolId: vehicleProto.id,
+      messageId: vmMsg?.id,
       intervalMs: 1000,
       enabled: true,
-      fields: vehicleMsg.fields
+      fields: (vmMsg?.fields ?? [])
         .filter((f) => f.type !== "crc" && f.offset >= 0)
         .map((f) => {
           const isDist = f.name.includes("distance") || f.name.includes("pos") || f.name.includes("dist");
@@ -195,7 +221,7 @@ export function CasePage() {
           <EmptyState
             icon={IC.case}
             title="还没有自动化用例"
-            desc="用例用于自动化循环发送心跳、车辆行走、动态增量测试等场景，完全免代码图形化配置。"
+            desc="用例用于自动化循环发送心跳协议、车辆行走协议等任务，完全免代码图形化配置。"
           >
             <button className="btn-primary" onClick={() => createCase("车辆自动化测试")}>
               <Icon cp={IC.plus} size={11} color="#fff" />
@@ -259,7 +285,7 @@ export function CasePage() {
                   )}
                 </div>
                 <div className="case-card-meta">
-                  {(c.actions?.length || (c.fieldRules?.length ? 1 : 0))} 个任务 · {c.steps?.length ?? 0} 个断言
+                  {(c.actions?.length || (c.fieldRules?.length ? 1 : 0))} 个协议任务 · {c.steps?.length ?? 0} 个断言
                 </div>
                 <div className={`case-card-status ${c.status === "passed" ? "pass" : c.status === "failed" ? "fail" : "idle"}`}>
                   <Icon
@@ -274,7 +300,7 @@ export function CasePage() {
           </div>
         </div>
 
-        {/* 中间：纯图形化用例编排（免代码） */}
+        {/* 中间：纯图形化用例编排（免代码，从我添加的协议中选） */}
         <div className="case-main" style={{ overflowY: "auto", padding: "16px 20px" }}>
           {/* 用例顶栏 */}
           <div className="case-head" style={{ marginBottom: 14 }}>
@@ -287,11 +313,11 @@ export function CasePage() {
                   value={active.name}
                   onChange={(e) => updateCase(active.id, { name: e.target.value })}
                 />
-                <span className="tag-mini" style={{ background: "rgba(88, 166, 255, 0.15)", color: "var(--accent)" }}>
-                  协议: {proto?.name ?? "未关联协议"}
-                </span>
                 <span className="tag-mini" style={{ color: "var(--t3)" }}>
                   子产品: {subProducts.find((x) => x.id === active.subProductId)?.name ?? "主模块"}
+                </span>
+                <span className="tag-mini" style={{ background: "rgba(88, 166, 255, 0.15)", color: "var(--accent)" }}>
+                  可用协议: {protocols.length} 个
                 </span>
               </div>
             </div>
@@ -353,8 +379,8 @@ export function CasePage() {
           {/* 一键载入场景快捷提示栏 */}
           <div className="quick-preset-banner">
             <div>
-              <div className="title">场景一键配置</div>
-              <div className="desc">一键生成「每秒发送心跳」与「每秒发送车辆行走+10米」任务，字段与变化规则全部在界面中配置。</div>
+              <div className="title">心跳与行走场景一键配置</div>
+              <div className="desc">从您添加的协议中直接载入「心跳协议」与「车辆行走协议(+10米/秒)」，并在界面中随时增减字段与步长。</div>
             </div>
             <button
               className="btn-primary"
@@ -362,28 +388,30 @@ export function CasePage() {
               onClick={loadHeartbeatAndMovePreset}
             >
               <Icon cp={IC.plus} size={11} color="#fff" />
-              <span>载入 心跳+行走(+10米) 场景</span>
+              <span>载入 心跳协议 + 行走协议(+10米) 场景</span>
             </button>
           </div>
 
-          {/* 报文任务列表 (免代码图形化卡片) */}
+          {/* 协议任务列表 (免代码图形化卡片，从我添加的协议中选) */}
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
               <Icon cp={IC.protocol} size={15} color="var(--accent)" />
-              <span style={{ fontSize: 13, fontWeight: 600, color: "var(--t1)" }}>报文下发任务（产品协议驱动，免代码配置）</span>
+              <span style={{ fontSize: 13, fontWeight: 600, color: "var(--t1)" }}>协议下发任务列表（每个任务直接关联您添加的协议）</span>
               <span className="tag-mini">{actions.length} 个任务</span>
             </div>
           </div>
 
           {actions.map((act, actIdx) => {
-            const currentMsg = proto?.messages.find((m) => m.id === act.messageId) ?? proto?.messages[0];
-            const prev1 = computeActionPreview(proto, act, 0);
-            const prev2 = computeActionPreview(proto, act, 1);
-            const prev3 = computeActionPreview(proto, act, 2);
+            // 直接从用户添加的协议中查找对应的协议
+            const currentProto = protocols.find((p) => p.id === act.protocolId) ?? protocols[0];
+            const currentMsg = (act.messageId ? currentProto?.messages.find((m) => m.id === act.messageId) : null) ?? currentProto?.messages[0];
+            const prev1 = computeActionPreview(currentProto, act, 0);
+            const prev2 = computeActionPreview(currentProto, act, 1);
+            const prev3 = computeActionPreview(currentProto, act, 2);
 
             return (
               <div key={act.id} className={`action-task-card${act.enabled === false ? " disabled" : ""}`}>
-                {/* 任务卡片头部 */}
+                {/* 任务卡片头部：从我添加的协议中选择 */}
                 <div className="action-task-head">
                   <input
                     type="checkbox"
@@ -397,39 +425,50 @@ export function CasePage() {
                   <input
                     type="text"
                     className="proto-input"
-                    style={{ width: 180, fontWeight: 600, color: "var(--t1)" }}
+                    style={{ width: 170, fontWeight: 600, color: "var(--t1)" }}
                     value={act.name}
                     onChange={(e) => {
                       const next = actions.map((a, i) => (i === actIdx ? { ...a, name: e.target.value } : a));
                       saveActions(next);
                     }}
                   />
-                  <span style={{ fontSize: 11, color: "var(--t3)", marginLeft: 6 }}>对应协议报文:</span>
+
+                  {/* 核心改动：直接从我添加的协议列表中选！ */}
+                  <span style={{ fontSize: 11, color: "var(--t2)", marginLeft: 6, fontWeight: 500 }}>选择下发协议:</span>
                   <select
                     className="cell-select"
-                    style={{ height: 24, fontSize: 11, background: "var(--bg-panel-2)", border: "1px solid var(--line-2)", color: "#fff", borderRadius: 4 }}
-                    value={currentMsg?.id}
+                    style={{ height: 26, fontSize: 11, background: "var(--bg-panel-2)", border: "1px solid var(--accent)", color: "#fff", fontWeight: 600, borderRadius: 4, padding: "0 6px" }}
+                    value={currentProto?.id}
                     onChange={(e) => {
-                      const selectedMsg = proto?.messages.find((m) => m.id === e.target.value);
-                      if (!selectedMsg) return;
-                      const newFields: FieldActionRule[] = selectedMsg.fields
-                        .filter((f) => f.type !== "crc" && f.offset >= 0)
-                        .map((f) => ({
-                          fieldName: f.name,
-                          initValue: Number(f.value ?? 0),
-                          step: 0,
-                        }));
+                      const selectedProto = protocols.find((p) => p.id === e.target.value);
+                      if (!selectedProto) return;
+                      const msg = selectedProto.messages[0];
+                      const newFields: FieldActionRule[] = msg
+                        ? msg.fields
+                            .filter((f) => f.type !== "crc" && f.offset >= 0)
+                            .map((f) => ({
+                              fieldName: f.name,
+                              initValue: Number(f.value ?? 0),
+                              step: 0,
+                            }))
+                        : [];
                       const next = actions.map((a, i) =>
                         i === actIdx
-                          ? { ...a, messageId: selectedMsg.id, fields: newFields }
+                          ? {
+                              ...a,
+                              protocolId: selectedProto.id,
+                              messageId: msg?.id,
+                              fields: newFields,
+                              name: a.name.startsWith("下发") ? `下发「${selectedProto.name}」` : a.name,
+                            }
                           : a,
                       );
                       saveActions(next);
                     }}
                   >
-                    {proto?.messages.map((m) => (
-                      <option key={m.id} value={m.id}>
-                        {m.name} ({m.id})
+                    {protocols.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name}
                       </option>
                     ))}
                   </select>
@@ -451,7 +490,7 @@ export function CasePage() {
                   </button>
                 </div>
 
-                {/* 任务卡片主体：字段规则表 */}
+                {/* 任务卡片主体：该协议的字段与增量规则表 */}
                 <div className="action-task-body">
                   <table className="proto-field-table">
                     <thead>
@@ -533,7 +572,7 @@ export function CasePage() {
                   <div className="hex-preview-box">
                     <div style={{ display: "flex", alignItems: "center", gap: 6, fontWeight: 600, color: "var(--t2)" }}>
                       <Icon cp={IC.terminal} size={11} color="var(--accent)" />
-                      <span>实时封包与校验预览：</span>
+                      <span>「{currentProto?.name}」实时自动封包与校验预览：</span>
                     </div>
                     <div className="hex-preview-line">
                       <span style={{ width: 55 }}>第 1 秒:</span>
@@ -556,10 +595,10 @@ export function CasePage() {
             );
           })}
 
-          {/* 添加报文任务卡片按钮 */}
+          {/* 添加协议任务卡片按钮 */}
           <button className="action-add-btn" onClick={() => handleAddAction()}>
             <Icon cp={IC.plus} size={13} color="var(--accent)" />
-            <span>+ 添加报文下发任务（如：选择协议中的心跳包、行走包等）</span>
+            <span>+ 添加协议下发任务（直接关联您添加的协议）</span>
           </button>
 
           {/* 响应断言与验证面板 */}
@@ -628,7 +667,7 @@ export function CasePage() {
           {/* 底部操作与管理 */}
           <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 24, paddingTop: 14, borderTop: "1px solid var(--line-3)" }}>
             <span style={{ fontSize: 11, color: "var(--t3)" }}>
-              当前用例：{actions.length} 个报文任务 · {assertionSteps.length} 个断言
+              当前用例：{actions.length} 个协议下发任务 · {assertionSteps.length} 个断言
             </span>
             <span className="spacer" />
             <button className="btn sm" onClick={() => duplicateCase(active.id)}>
@@ -709,7 +748,7 @@ export function CasePage() {
               <div style={{ height: "100%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", color: "var(--t4)", fontSize: 11, textAlign: "center", gap: 8 }}>
                 <Icon cp={IC.history} size={28} color="var(--line-2)" />
                 <span>点击上方「▶ 运行用例」</span>
-                <span>此处将实时滚动呈现每秒下发的报文及回包断言结果</span>
+                <span>此处将实时滚动呈现每秒下发的协议帧及回包断言结果</span>
               </div>
             )}
           </div>

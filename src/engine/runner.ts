@@ -13,6 +13,7 @@ import type { CaseItem, CaseStep, Frame, RunResult, StepResult } from "./types";
 
 export interface RunnerHost {
   getProtocol: () => PdlProtocol;
+  getAllProtocols?: () => PdlProtocol[];
   getFrames: () => Frame[];
   pushFrame: (f: Omit<Frame, "id" | "time" | "ts" | "no">) => void;
   write: (bytes: number[]) => Promise<void>;
@@ -696,11 +697,12 @@ async function runOnce(
     const steps = vars.length ? applyRow(item, row).steps : item.steps;
     const tag = rounds === Infinity ? `[#${r + 1}] ` : rounds > 1 ? `[第${r + 1}轮] ` : "";
 
-    // 多报文任务图形化下发（心跳每秒发送、车辆行走每秒+10米等）
+    // 多协议任务图形化下发（支持从用户添加的协议中选：心跳协议、车辆行走协议等）
     if (item.actions && item.actions.length > 0) {
-      const proto = host.getProtocol();
+      const allProtocols = host.getAllProtocols ? host.getAllProtocols() : [host.getProtocol()];
       for (const act of item.actions) {
         if (act.enabled === false) continue;
+        const proto = (act.protocolId ? allProtocols.find((p) => p.id === act.protocolId) : null) ?? host.getProtocol();
         const msg = (act.messageId ? proto.messages.find((m) => m.id === act.messageId) : null) ?? proto.messages[0];
         if (!msg) continue;
 
@@ -717,7 +719,14 @@ async function runOnce(
         }
 
         const bytes = encodeMessage(proto, msg, values);
-        host.pushFrame({ dir: "tx", source: "case", bytes, crcOk: decodeFrame(proto, bytes).crcOk });
+        host.pushFrame({
+          dir: "tx",
+          source: "case",
+          bytes,
+          crcOk: decodeFrame(proto, bytes).crcOk,
+          protocolName: proto.name,
+          protocolId: proto.id,
+        });
         if (host.isLinkOpen()) {
           try {
             await host.write(bytes);
@@ -729,11 +738,11 @@ async function runOnce(
         items.push({
           stepId: `${act.id}_r${r}`,
           kind: "send",
-          text: `${tag}下发「${act.name || msg.name}」`,
+          text: `${tag}下发「${proto.name}」`,
           status: "pass",
           startedAt: nowTime(),
           durationMs: 0,
-          expected: displayVals ? `字段: ${displayVals}` : "固定报文",
+          expected: displayVals ? `字段: ${displayVals}` : "固定协议帧",
           actual: `已发送 ${bytes.length} 字节 [${toHex(bytes)}]`,
           frameHex: toHex(bytes),
         });

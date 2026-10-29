@@ -361,6 +361,7 @@ export const useStore = create<State>((set, get) => {
       // 没选中就按原始字节，绝不猜一个协议去解别人的帧
       return hit ?? RAW_PROTOCOL;
     },
+    getAllProtocols: () => get().protocols,
     getFrames: () => get().frames,
     pushFrame: (f) => get().pushFrame(f),
     write: async (bytes) => {
@@ -569,7 +570,22 @@ export const useStore = create<State>((set, get) => {
         const proto = host.getProtocol();
         splitter = new FrameSplitter(() => host.getProtocol());
         const emit = (frame: number[], warn?: string) => {
-          const d = decodeFrame(host.getProtocol(), frame);
+          const allProtocols = get().protocols;
+          let activeProto = allProtocols.find((p) => p.id === get().activeProtocolId) ?? allProtocols[0] ?? host.getProtocol();
+          let d = decodeFrame(activeProto, frame);
+
+          if ((!d.matched || !d.crcOk) && allProtocols.length > 1) {
+            for (const op of allProtocols) {
+              if (op.id === activeProto.id) continue;
+              const probe = decodeFrame(op, frame);
+              if (probe.matched && probe.crcOk) {
+                activeProto = op;
+                d = probe;
+                break;
+              }
+            }
+          }
+
           get().pushFrame({
             dir: "rx",
             source: "device",
@@ -580,6 +596,8 @@ export const useStore = create<State>((set, get) => {
             crcExpected: d.crcExpected,
             crcActual: d.crcActual,
             banner: warn ?? d.matchError ?? (!d.lengthOk ? `长度不符：${d.lengthError}` : undefined),
+            protocolName: activeProto?.name,
+            protocolId: activeProto?.id,
           });
         };
         const onBytes = (bytes: number[]) => {
@@ -653,8 +671,20 @@ export const useStore = create<State>((set, get) => {
     },
 
     sendBytes: async (bytes, source = "manual") => {
-      const proto = host.getProtocol();
-      const d = decodeFrame(proto, bytes);
+      const allProtocols = get().protocols;
+      let proto = allProtocols.find((p) => p.id === get().activeProtocolId) ?? allProtocols[0] ?? host.getProtocol();
+      let d = decodeFrame(proto, bytes);
+      if ((!d.matched || !d.crcOk) && allProtocols.length > 1) {
+        for (const op of allProtocols) {
+          if (op.id === proto.id) continue;
+          const probe = decodeFrame(op, bytes);
+          if (probe.matched && probe.crcOk) {
+            proto = op;
+            d = probe;
+            break;
+          }
+        }
+      }
       get().pushFrame({
         dir: "tx",
         source,
@@ -665,6 +695,8 @@ export const useStore = create<State>((set, get) => {
         crcExpected: d.crcExpected,
         crcActual: d.crcActual,
         banner: d.matchError ?? (!d.lengthOk ? `长度不符：${d.lengthError}` : undefined),
+        protocolName: proto?.name,
+        protocolId: proto?.id,
       });
       const m = await import("./serial");
       if (!m.isOpen()) return;

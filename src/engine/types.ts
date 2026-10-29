@@ -94,6 +94,8 @@ export interface Frame {
   banner?: string;
   diffBytes?: number[];
   matched?: boolean;
+  protocolName?: string;
+  protocolId?: string;
 }
 
 /** 纯界面配置：报文字段值与增量规则 */
@@ -103,11 +105,12 @@ export interface FieldActionRule {
   step: number; // 每次加多少（如 10）
 }
 
-/** 纯界面配置：报文动作发送任务（如：每秒发送心跳、每秒车辆行走+10米） */
+/** 纯界面配置：报文动作发送任务（如：每秒发送心跳协议、每秒车辆行走协议+10米） */
 export interface CasePacketAction {
   id: string;
   name: string;
-  messageId: string;
+  protocolId: string; // 关联的用户添加的协议 ID
+  messageId?: string; // 协议内的特定报文 ID
   intervalMs: number; // 周期毫秒（如 1000 代表每秒）
   enabled: boolean;
   fields: FieldActionRule[];

@@ -115,6 +115,7 @@ export function Inspector() {
                 <div className="insp-hex">{toHex(frame.bytes)}</div>
                 <div className="insp-meta">
                   {frame.bytes.length} 字节 · {frame.dir === "rx" ? "接收" : "发送"}
+                  {frame.protocolName ? ` · 所属协议: ${frame.protocolName}` : ""}
                   {frame.banner ? ` · ${frame.banner}` : ""}
                 </div>
               </div>
@@ -122,7 +123,7 @@ export function Inspector() {
               <div className="insp-card">
                 <div className="insp-card-head">
                   <Icon cp={IC.protocolDoc} size={11} color="var(--t3)" />
-                  <span className="insp-card-title">{frame.matched === false ? "解包字段（不适用）" : `解包字段（${fields.length}）`}</span>
+                  <span className="insp-card-title">{frame.matched === false ? "解包字段（不适用）" : `解包字段（${fields.length}）${frame.protocolName ? ` · ${frame.protocolName}` : ""}`}</span>
                   <span className="spacer" />
                   <button className="mini-btn" onClick={() => setView("protocol")}>
                     改协议

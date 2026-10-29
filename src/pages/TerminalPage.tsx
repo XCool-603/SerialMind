@@ -34,7 +34,10 @@ function DirCell({ dir }: { dir: "rx" | "tx" }) {
 }
 
 function FieldPairs({ frame, proto }: { frame: Frame; proto?: PdlProtocol }) {
-  const pairs: { k: string; v: string; ok?: boolean }[] = [];
+  const currentProtoName = frame.protocolName || proto?.name || "未指定协议";
+  const pairs: { k: string; v: string; ok?: boolean }[] = [
+    { k: "所属协议", v: currentProtoName, ok: true },
+  ];
   for (const f of frame.fields ?? []) {
     if (f.field.type === "crc") continue;
     pairs.push({ k: f.field.name, v: `=${f.display}`, ok: f.ok ? undefined : false });
@@ -131,7 +134,7 @@ export function TerminalPage() {
   const streamEndRef = useRef<HTMLDivElement | null>(null);
 
   const link = connection;
-  const { protocols, activeProtocolId } = useStore();
+  const { protocols, activeProtocolId, setActiveProtocol } = useStore();
   const proto = protocols.find((p) => p.id === activeProtocolId);
 
   useEffect(() => {
@@ -187,6 +190,25 @@ export function TerminalPage() {
             <span>{f.label}</span>
           </button>
         ))}
+
+        {/* 当前解析协议选择器（用户添加的协议） */}
+        <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "2px 8px", background: "var(--bg-panel-2)", border: "1px solid var(--line-2)", borderRadius: 6 }}>
+          <Icon cp={IC.protocol} size={12} color="var(--accent)" />
+          <span style={{ fontSize: 11, color: "var(--t2)", fontWeight: 500 }}>解析协议:</span>
+          <select
+            className="cell-select"
+            style={{ height: 22, fontSize: 11, background: "transparent", border: "none", color: "#fff", fontWeight: 600, outline: "none", cursor: "pointer" }}
+            value={activeProtocolId}
+            onChange={(e) => setActiveProtocol(e.target.value)}
+            title="选择用于串口终端解析与组包的协议（来自我添加的协议）"
+          >
+            {protocols.map((p) => (
+              <option key={p.id} value={p.id} style={{ background: "var(--bg-panel-1)", color: "#fff" }}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+        </div>
 
         <span className="spacer" />
 
@@ -282,6 +304,9 @@ export function TerminalPage() {
             <div key={f.id} className={`stream-line ${f.dir}`}>
               {showTimestamp && <span className="stream-time">[{f.time}]</span>}
               <span className={`stream-badge ${f.dir}`}>{f.dir === "rx" ? "RX" : "TX"}</span>
+              <span className="stream-proto" style={{ fontSize: 10, color: "var(--accent)", padding: "1px 5px", background: "rgba(88,166,255,0.12)", borderRadius: 3, fontWeight: 500, marginRight: 6 }}>
+                {f.protocolName || proto?.name || "协议"}
+              </span>
               <span className="stream-text">
                 {viewMode === "ascii" ? bytesToString(f.bytes) : toHex(f.bytes)}
               </span>
@@ -296,6 +321,7 @@ export function TerminalPage() {
             <span className="c-time">时间</span>
             <span className="c-dir">方向</span>
             <span className="c-no">帧号</span>
+            <span style={{ width: 110, fontSize: 11, color: "var(--t3)", padding: "0 6px" }}>所属协议</span>
             <span className="c-src">来源</span>
             <span className="c-hex">报文</span>
             <span className="c-len">长度</span>
@@ -322,6 +348,9 @@ export function TerminalPage() {
                     <DirCell dir={f.dir} />
                   </span>
                   <span className="c-no">#{f.no}</span>
+                  <span style={{ width: 110, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "var(--accent)", fontSize: 11, padding: "0 6px", fontWeight: 500 }}>
+                    {f.protocolName || proto?.name || "—"}
+                  </span>
                   <span className="c-src">{SOURCE_LABEL[f.source]}</span>
                   <span className="c-hex hex-cell">{hexText(f)}</span>
                   <span className="c-len">{f.bytes.length}B</span>
