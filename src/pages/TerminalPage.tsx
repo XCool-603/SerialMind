@@ -3,6 +3,7 @@ import { useStore, type Frame, type Source } from "../engine/store";
 import { toHex, asciiView, bytesToString, parseHex, stringToBytes } from "../engine/bytes";
 import { Icon, IC } from "../components/Icon";
 import type { PdlProtocol } from "../engine/pdl";
+import { encodeMessage } from "../engine/codec";
 import { download, stampName } from "../lib/download";
 import { ALGORITHM_GROUPS, ALGORITHM_META } from "../engine/crc";
 
@@ -78,6 +79,20 @@ function FieldPairs({ frame, proto }: { frame: Frame; proto?: PdlProtocol }) {
   );
 }
 
+function getProtocolBytes(p: PdlProtocol): number[] {
+  try {
+    const msg = p.messages[0];
+    if (!msg) return [];
+    const values: Record<string, number | string> = {};
+    for (const f of msg.fields) {
+      if (f.value !== undefined) values[f.name] = f.value;
+    }
+    return encodeMessage(p, msg, values);
+  } catch {
+    return p.sampleFrame ? parseHex(p.sampleFrame) : [];
+  }
+}
+
 export function TerminalPage() {
   const {
     frames,
@@ -127,14 +142,49 @@ export function TerminalPage() {
     currentLoopIndex,
     sendBytes,
     resetCounters,
+    protocols,
+    activeProtocolId,
+    setActiveProtocol,
   } = useStore();
 
   const [expanded, setExpanded] = useState<Set<number>>(() => new Set());
   const [quickPanelOpen, setQuickPanelOpen] = useState(true);
+  const [selectedProtoIds, setSelectedProtoIds] = useState<string[]>([]);
+  const [loopingProto, setLoopingProto] = useState(false);
+  const [currentLoopProtoIdx, setCurrentLoopProtoIdx] = useState(0);
+
+  // 初始化勾选项
+  useEffect(() => {
+    if (protocols.length > 0 && selectedProtoIds.length === 0) {
+      setSelectedProtoIds(protocols.map((p) => p.id));
+    }
+  }, [protocols]);
+
+  // 协议循环下发定时器
+  useEffect(() => {
+    if (!loopingProto) return;
+    const activeList = protocols.filter((p) => selectedProtoIds.includes(p.id));
+    if (activeList.length === 0) {
+      setLoopingProto(false);
+      return;
+    }
+    const timer = setInterval(() => {
+      setCurrentLoopProtoIdx((prev) => {
+        const nextIdx = (prev + 1) % activeList.length;
+        const targetProto = activeList[nextIdx];
+        if (targetProto) {
+          const bytes = getProtocolBytes(targetProto);
+          if (bytes.length) void sendBytes(bytes, "manual");
+        }
+        return nextIdx;
+      });
+    }, Math.max(50, loopIntervalMs));
+    return () => clearInterval(timer);
+  }, [loopingProto, loopIntervalMs, protocols, selectedProtoIds, sendBytes]);
+
   const streamEndRef = useRef<HTMLDivElement | null>(null);
 
   const link = connection;
-  const { protocols, activeProtocolId, setActiveProtocol } = useStore();
   const proto = protocols.find((p) => p.id === activeProtocolId);
 
   useEffect(() => {
@@ -389,22 +439,22 @@ export function TerminalPage() {
           onClick={() => setQuickPanelOpen(!quickPanelOpen)}
         >
           <Icon cp={quickPanelOpen ? IC.chevronDown : IC.chevronRight} size={10} color="var(--accent)" />
-          <span>SSCom 多条快捷指令 ({quickSends.length})</span>
+          <span>通信协议快捷指令 ({protocols.length})</span>
         </button>
       </div>
 
-      {/* SSCom 多条快捷指令发送面板 */}
+      {/* 通信协议快捷指令发送面板（当前产品的通讯协议列表） */}
       {quickPanelOpen && (
         <div className="quick-panel">
           <div className="quick-panel-head">
             <span className="quick-panel-title">
-              <Icon cp={IC.rule} size={12} color="var(--accent)" />
-              多条预设指令
+              <Icon cp={IC.protocol} size={12} color="var(--accent)" />
+              当前产品通讯协议 ({protocols.length})
             </span>
             <span className="spacer" />
-            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10, color: "var(--t2)" }}>
-                <span>轮询间隔</span>
+                <span>轮询周期</span>
                 <input
                   type="number"
                   style={{ width: 55, height: 20, background: "#090d14", border: "1px solid var(--line-2)", color: "#fff", borderRadius: 3, padding: "0 4px", fontSize: 10 }}
@@ -414,82 +464,115 @@ export function TerminalPage() {
                 <span>ms</span>
               </label>
               <button
-                className={loopingQuick ? "btn sm danger" : "btn sm"}
-                style={{ height: 22, fontSize: 10, background: loopingQuick ? "var(--red)" : "var(--accent)", color: "#fff" }}
-                onClick={toggleLoopQuickSend}
+                className={loopingProto ? "btn sm danger" : "btn sm"}
+                style={{ height: 22, fontSize: 10, background: loopingProto ? "var(--red)" : "var(--accent)", color: "#fff" }}
+                onClick={() => {
+                  if (loopingProto) {
+                    setLoopingProto(false);
+                  } else {
+                    const activeList = protocols.filter((p) => selectedProtoIds.includes(p.id));
+                    if (activeList.length === 0) {
+                      alert("请先勾选需要轮询下发的通信协议");
+                      return;
+                    }
+                    setLoopingProto(true);
+                  }
+                }}
               >
-                <Icon cp={loopingQuick ? IC.close : IC.play} size={10} color="#fff" />
-                <span>{loopingQuick ? "停止轮询" : "循环发送勾选项"}</span>
+                <Icon cp={loopingProto ? IC.close : IC.play} size={10} color="#fff" />
+                <span>{loopingProto ? "停止轮询" : "循环轮询勾选协议"}</span>
               </button>
               <button
                 className="btn sm"
-                style={{ height: 22, fontSize: 10 }}
-                onClick={() => addQuickSend()}
+                style={{ height: 22, fontSize: 10, color: "var(--accent)" }}
+                onClick={() => setView("protocol")}
+                title="去协议页新建或编辑协议"
               >
-                <Icon cp={IC.plus} size={10} color="var(--t2)" />
-                添加
+                <Icon cp={IC.plus} size={10} color="var(--accent)" />
+                <span>新建协议</span>
               </button>
             </div>
           </div>
 
-          <div className="quick-panel-body">
-            {quickSends.map((q, idx) => (
-              <div
-                key={q.id}
-                className={`quick-row${loopingQuick && currentLoopIndex === idx ? " active-loop" : ""}`}
-              >
-                <input
-                  type="checkbox"
-                  checked={q.enabled}
-                  onChange={(e) => updateQuickSend(q.id, { enabled: e.target.checked })}
-                  title="勾选后参与循环轮询发送"
-                />
-                <button
-                  className={`quick-mode-btn ${q.hex ? "hex" : "text"}`}
-                  onClick={() => updateQuickSend(q.id, { hex: !q.hex })}
-                  title="点击切换 HEX / 字符模式"
-                >
-                  {q.hex ? "HEX" : "字符"}
-                </button>
-                <input
-                  className="quick-input-content"
-                  value={q.content}
-                  placeholder={q.hex ? "十六进制数据，如 01 03 00 00 00 02" : "文本数据，如 AT+CSQ (支持 \\r\\n)"}
-                  onChange={(e) => updateQuickSend(q.id, { content: e.target.value })}
-                />
-                <input
-                  className="quick-input-note"
-                  value={q.note}
-                  placeholder="指令备注"
-                  onChange={(e) => updateQuickSend(q.id, { note: e.target.value })}
-                />
-                <button
-                  className="quick-send-btn"
-                  onClick={() => {
-                    let bytes: number[] = [];
-                    if (q.hex) {
-                      let h = q.content;
-                      if (sendNewline) h += " 0D 0A";
-                      bytes = parseHex(h);
-                    } else {
-                      let t = q.content;
-                      if (sendNewline && !t.endsWith("\r\n")) t += "\r\n";
-                      bytes = stringToBytes(t, true);
-                    }
-                    if (bytes.length) void sendBytes(bytes, "manual");
-                  }}
-                >
-                  发送
-                </button>
-                <button
-                  className="quick-del-btn"
-                  onClick={() => deleteQuickSend(q.id)}
-                  title="删除此行"
-                >
-                  <Icon cp={IC.trash} size={11} color="var(--t4)" />
-                </button>
+          <div className="quick-panel-body" style={{ maxHeight: 180, overflowY: "auto" }}>
+            {protocols.length === 0 ? (
+              <div style={{ padding: "16px 20px", textAlign: "center", color: "var(--t3)", fontSize: 11 }}>
+                当前产品暂无通信协议，点击右上角「新建协议」快速添加。
               </div>
-            ))}
+            ) : (
+              protocols.map((p, idx) => {
+                const bytes = getProtocolBytes(p);
+                const hexStr = toHex(bytes);
+                const isSelected = selectedProtoIds.includes(p.id);
+                const isCurrentLooping = loopingProto && currentLoopProtoIdx === idx;
+
+                return (
+                  <div
+                    key={p.id}
+                    className={`quick-row${isCurrentLooping ? " active-loop" : ""}`}
+                    style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 10px" }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={isSelected}
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          setSelectedProtoIds([...selectedProtoIds, p.id]);
+                        } else {
+                          setSelectedProtoIds(selectedProtoIds.filter((id) => id !== p.id));
+                        }
+                      }}
+                      title="勾选后参与循环轮询下发"
+                    />
+                    <span style={{ fontWeight: 600, color: "var(--t1)", width: 140, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 11 }}>
+                      {p.name}
+                    </span>
+                    <span className="tag-mini" style={{ fontSize: 9, color: "var(--t3)", width: 90 }}>
+                      {p.messages[0]?.fields.length ?? 0} 字段 · {p.checksum.algorithm}
+                    </span>
+                    <span
+                      style={{
+                        flex: 1,
+                        minWidth: 0,
+                        fontFamily: "var(--font-mono, monospace)",
+                        fontSize: 10,
+                        color: "var(--accent)",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                        background: "rgba(0,0,0,0.3)",
+                        padding: "2px 6px",
+                        borderRadius: 3,
+                      }}
+                      title={hexStr}
+                    >
+                      {hexStr || "—"}
+                    </span>
+                    <button
+                      className="quick-send-btn"
+                      style={{ height: 22, padding: "0 10px", fontSize: 10, flex: "none" }}
+                      onClick={() => {
+                        if (bytes.length) void sendBytes(bytes, "manual");
+                      }}
+                      title="立即下发此协议数据帧"
+                    >
+                      ▶ 发送
+                    </button>
+                    <button
+                      className="btn sm"
+                      style={{ height: 22, padding: "0 6px", fontSize: 10, flex: "none" }}
+                      onClick={() => {
+                        setSendMode("hex");
+                        setSendInput(hexStr);
+                      }}
+                      title="将此协议 HEX 填入下方单条发送框以微调"
+                    >
+                      填入
+                    </button>
+                  </div>
+                );
+              })
+            )}
           </div>
         </div>
       )}

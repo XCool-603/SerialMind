@@ -68,6 +68,7 @@ export function CasePage() {
   const [query, setQuery] = useState("");
   const [tagFilter, setTagFilter] = useState("全部");
   const liveStreamEndRef = useRef<HTMLDivElement | null>(null);
+  const [collapsedActions, setCollapsedActions] = useState<Record<string, boolean>>({});
 
   const active = cases.find((c) => c.id === activeCaseId) ?? cases[0];
 
@@ -539,11 +540,21 @@ export function CasePage() {
             const prev1 = computeActionPreview(currentProto, act, 0);
             const prev2 = computeActionPreview(currentProto, act, 1);
             const prev3 = computeActionPreview(currentProto, act, 2);
+            const isCollapsed = Boolean(collapsedActions[act.id]);
+            const stepFieldCount = (act.fields ?? []).filter((f) => f.step !== 0).length;
 
             return (
-              <div key={act.id} className={`action-task-card${act.enabled === false ? " disabled" : ""}`}>
+              <div key={act.id} className={`action-task-card${act.enabled === false ? " disabled" : ""}${isCollapsed ? " collapsed" : ""}`}>
                 {/* 任务卡片头部：从我添加的协议中选择 */}
                 <div className="action-task-head">
+                  <button
+                    className="btn sm"
+                    style={{ height: 20, width: 20, padding: 0, border: "none", background: "transparent", cursor: "pointer", display: "inline-flex", alignItems: "center", justifyContent: "center" }}
+                    onClick={() => setCollapsedActions((prev) => ({ ...prev, [act.id]: !prev[act.id] }))}
+                    title={isCollapsed ? "展开此任务" : "折叠此任务"}
+                  >
+                    <Icon cp={isCollapsed ? IC.chevronRight : IC.chevronDown} size={11} color="var(--t2)" />
+                  </button>
                   <input
                     type="checkbox"
                     checked={act.enabled !== false}
@@ -596,6 +607,10 @@ export function CasePage() {
                     ))}
                   </select>
 
+                  <span className="tag-mini" style={{ color: stepFieldCount > 0 ? "var(--green)" : "var(--accent)", fontSize: 10, marginLeft: 6 }}>
+                    共 {currentMsg?.fields.filter((f) => f.type !== "crc" && f.offset >= 0).length ?? 0} 个字段 · {stepFieldCount} 个递增变化
+                  </span>
+
                   <span className="spacer" />
 
                   <button
@@ -620,6 +635,7 @@ export function CasePage() {
                     <span style={{ color: "var(--t4)", fontSize: 10 }}>共 {currentMsg?.fields.filter((f) => f.type !== "crc" && f.offset >= 0).length ?? 0} 个可控字段</span>
                   </div>
 
+                  <div className="proto-field-table-wrap">
                   <table className="proto-field-table">
                     <thead>
                       <tr>
@@ -780,6 +796,7 @@ export function CasePage() {
                         })}
                     </tbody>
                   </table>
+                  </div>
 
                   {/* 实时自动封包与校验预览 */}
                   <div className="hex-preview-box">

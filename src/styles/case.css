@@ -620,6 +620,46 @@
 }
 
 /* 多任务动作卡片 */
+/* 优雅高对比滚动条与表格包装器 */
+.case-main::-webkit-scrollbar,
+.proto-field-table-wrap::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.case-main::-webkit-scrollbar-track,
+.proto-field-table-wrap::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 4px;
+}
+.case-main::-webkit-scrollbar-thumb,
+.proto-field-table-wrap::-webkit-scrollbar-thumb {
+  background: var(--line-2, #30363d);
+  border-radius: 4px;
+}
+.case-main::-webkit-scrollbar-thumb:hover,
+.proto-field-table-wrap::-webkit-scrollbar-thumb:hover {
+  background: var(--accent, #58a6ff);
+}
+
+.proto-field-table-wrap {
+  max-height: 280px;
+  overflow-y: auto;
+  overflow-x: auto;
+  border: 1px solid var(--line-3);
+  border-radius: 6px;
+  background: var(--bg-main, #090d14);
+}
+.proto-field-table th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--bg-panel-3, #162030) !important;
+}
+
+.action-task-card.collapsed .action-task-body {
+  display: none;
+}
+
 .action-task-card {
   border: 1px solid var(--line-2);
   border-radius: 8px;

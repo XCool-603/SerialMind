@@ -304,9 +304,14 @@ export function TopBar() {
       </div>
 
       <div className="topbar-actions">
-        <button className="ai-switch" onClick={() => useStore.getState().toggleAi()}>
+        <button
+          className="ai-switch"
+          style={{ background: "rgba(168,85,247,0.15)", borderColor: "rgba(168,85,247,0.4)" }}
+          onClick={() => useStore.getState().toggleAi()}
+          title="点击打开 AI 智能设计中心（支持 DeepSeek 生成协议/测试用例/整套产品）"
+        >
           <Icon cp={IC.ai} size={14} color="var(--purple)" />
-          <span className="ai-switch-label">AI · {aiLevel}</span>
+          <span className="ai-switch-label" style={{ color: "#d8b4fe", fontWeight: 600 }}>✨ AI 助手 (DeepSeek)</span>
         </button>
 
         <button className="btn-primary" onClick={() => void useStore.getState().runActiveCase()}>

@@ -396,3 +396,324 @@ export function previewBytes(d: DraftResult): string {
 }
 
 export { detectMessage };
+
+/* ================= 自动化测试用例与产品 AI 生成（支持 DeepSeek） ================= */
+
+export interface GeneratedCaseAction {
+  protocolId: string;
+  protocolName: string;
+  intervalMs: number;
+  fields: { fieldName: string; step: number; customInit?: number }[];
+}
+
+export interface GeneratedCaseDraft {
+  name: string;
+  intervalMs: number;
+  repeat: number;
+  actions: GeneratedCaseAction[];
+  assertions: { expectHex?: string; fieldName?: string; op: string; val: string | number }[];
+  explanation: string;
+}
+
+export interface GeneratedProductDraft {
+  productName: string;
+  subProductName: string;
+  protocols: {
+    name: string;
+    fields: PdlField[];
+    checksumAlg: ChecksumAlgorithm;
+    sampleFrame?: string;
+  }[];
+  caseName: string;
+  caseActions: {
+    protocolIndex: number;
+    intervalMs: number;
+    fields: { fieldName: string; step: number; customInit?: number }[];
+  }[];
+  explanation: string;
+}
+
+/** 本地规则推演生成测试用例（离线无需 Key） */
+export function localGenerateCaseDraft(userPrompt: string, protocols: PdlProtocol[]): GeneratedCaseDraft {
+  const actions: GeneratedCaseAction[] = [];
+  const text = userPrompt.toLowerCase();
+
+  // 1. 尝试匹配心跳
+  const hasHeartbeat = text.includes("心跳") || text.includes("heartbeat") || text.includes("ping");
+  const hbProto = protocols.find((p) => p.name.includes("心跳") || p.name.toLowerCase().includes("heartbeat")) ?? protocols[0];
+
+  if (hasHeartbeat && hbProto) {
+    actions.push({
+      protocolId: hbProto.id,
+      protocolName: hbProto.name,
+      intervalMs: 1000,
+      fields: [],
+    });
+  }
+
+  // 2. 尝试匹配业务协议（得分、行走、状态）
+  const statusProto = protocols.find((p) => p.id !== hbProto?.id) ?? hbProto ?? protocols[0];
+  if (statusProto) {
+    const fieldsRules: { fieldName: string; step: number; customInit?: number }[] = [];
+    const fields = statusProto.messages[0]?.fields.filter((f) => f.type !== "crc" && f.offset >= 0) ?? [];
+
+    for (const f of fields) {
+      const fn = f.name.toLowerCase();
+      // 得分 +1
+      if ((fn.includes("分") || fn.includes("score")) && (text.includes("分") || text.includes("+1") || text.includes("1"))) {
+        fieldsRules.push({ fieldName: f.name, step: 1, customInit: 0 });
+      }
+      // 行走 +10
+      else if ((fn.includes("走") || fn.includes("距") || fn.includes("distance") || fn.includes("pos")) && (text.includes("走") || text.includes("距") || text.includes("+10") || text.includes("10"))) {
+        fieldsRules.push({ fieldName: f.name, step: 10, customInit: 0 });
+      }
+      // 速度 +5
+      else if ((fn.includes("速") || fn.includes("speed")) && text.includes("速")) {
+        fieldsRules.push({ fieldName: f.name, step: 5, customInit: 0 });
+      }
+    }
+
+    // 如果没命中具体名字，但用户提到了数字增量，为前两个数值字段绑定步长
+    if (fieldsRules.length === 0 && fields.length > 0) {
+      const numericFields = fields.filter((f) => f.type === "uint" || f.type === "int");
+      if (numericFields[0]) fieldsRules.push({ fieldName: numericFields[0].name, step: 1, customInit: 0 });
+      if (numericFields[1]) fieldsRules.push({ fieldName: numericFields[1].name, step: 10, customInit: 0 });
+    }
+
+    actions.push({
+      protocolId: statusProto.id,
+      protocolName: statusProto.name,
+      intervalMs: 1000,
+      fields: fieldsRules,
+    });
+  }
+
+  return {
+    name: userPrompt.length > 20 ? userPrompt.slice(0, 18) + "…" : userPrompt || "自动化自增测试",
+    intervalMs: 1000,
+    repeat: 100,
+    actions: actions.length > 0 ? actions : (statusProto ? [{ protocolId: statusProto.id, protocolName: statusProto.name, intervalMs: 1000, fields: [] }] : []),
+    assertions: [],
+    explanation: "本地离线引擎：已自动匹配协议并为得分/行走字段绑定自增步长（无需联网）。",
+  };
+}
+
+/** 调用 DeepSeek / OpenAI 模型生成自动化测试用例 */
+export async function remoteGenerateCaseDraft(userPrompt: string, protocols: PdlProtocol[], cfg: AiConfig): Promise<GeneratedCaseDraft> {
+  const protoDescriptions = protocols.map((p, i) => {
+    const flds = p.messages[0]?.fields.filter((f) => f.type !== "crc" && f.offset >= 0).map((f) => `${f.name}(${f.type},初始${f.value ?? 0})`).join(", ");
+    return `${i + 1}. 协议名称: "${p.name}", id: "${p.id}", 可用字段: [${flds}]`;
+  }).join("\n");
+
+  const system = `你是嵌入式串口自动化专家。在串口自动化测试中，“变量”永远都是通信协议里的字段数据。
+现有通信协议列表：
+${protoDescriptions}
+
+用户需求：${userPrompt}
+
+请根据用户需求，从已有协议列表中挑出需要执行的协议，并为其中的字段配置步长（step：每次自增/自减多少）和初始值（customInit）。
+要求：只输出标准 JSON 格式，不要 Markdown 代码块，不要额外文字说明。
+JSON 格式示例：
+{
+  "name": "用例名称",
+  "intervalMs": 1000,
+  "repeat": 100,
+  "actions": [
+    {
+      "protocolId": "协议ID",
+      "protocolName": "协议名称",
+      "intervalMs": 1000,
+      "fields": [
+        { "fieldName": "字段名", "step": 1, "customInit": 0 }
+      ]
+    }
+  ],
+  "assertions": [],
+  "explanation": "简短设计意图"
+}`;
+
+  const res = await fetch(`${cfg.baseUrl.replace(/\/$/, "")}/chat/completions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${cfg.apiKey}` },
+    body: JSON.stringify({
+      model: cfg.model,
+      temperature: 0.1,
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: `请根据需求编排用例：${userPrompt}` },
+      ],
+    }),
+  });
+
+  if (!res.ok) throw new Error(`DeepSeek 响应异常 ${res.status}：${(await res.text()).slice(0, 160)}`);
+  const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
+  const rawContent = data.choices?.[0]?.message?.content ?? "";
+  const jsonText = rawContent.replace(/```json/gi, "").replace(/```/g, "").trim();
+  const parsed = JSON.parse(jsonText) as GeneratedCaseDraft;
+
+  // 校验补齐协议 ID
+  const fixedActions: GeneratedCaseAction[] = (parsed.actions ?? []).map((act) => {
+    const matchedProto = protocols.find((p) => p.id === act.protocolId || p.name === act.protocolName) ?? protocols[0];
+    return {
+      protocolId: matchedProto?.id ?? act.protocolId,
+      protocolName: matchedProto?.name ?? act.protocolName,
+      intervalMs: Number(act.intervalMs) || 1000,
+      fields: (act.fields ?? []).map((f) => ({
+        fieldName: f.fieldName,
+        step: Number(f.step) || 0,
+        customInit: f.customInit !== undefined ? Number(f.customInit) : undefined,
+      })),
+    };
+  });
+
+  return {
+    name: parsed.name || "AI 编排自动化用例",
+    intervalMs: Number(parsed.intervalMs) || 1000,
+    repeat: Number(parsed.repeat) || 100,
+    actions: fixedActions,
+    assertions: parsed.assertions ?? [],
+    explanation: parsed.explanation || "由 DeepSeek 模型智能编排生成。",
+  };
+}
+
+/** 本地生成整套产品与测试（离线无需 Key） */
+export function localGenerateProductDraft(userPrompt: string): GeneratedProductDraft {
+  const prodName = userPrompt.trim() || "智能车载控制终端";
+  return {
+    productName: prodName,
+    subProductName: "主控制器MCU",
+    protocols: [
+      {
+        name: "心跳保活帧",
+        checksumAlg: "ADD8",
+        fields: [
+          { id: "h1", name: "帧头", type: "uint", size: 1, offset: 0, value: 0x7e, hex: "7E", desc: "固定起始符" },
+          { id: "h2", name: "功能码", type: "uint", size: 1, offset: 1, value: 0x01, desc: "01=心跳" },
+          { id: "h3", name: "心跳计数", type: "uint", size: 2, offset: 2, value: 0, desc: "序列号" },
+          { id: "h4", name: "校验和", type: "crc", size: 1, offset: 4, desc: "SUM8校验" },
+          { id: "h5", name: "帧尾", type: "uint", size: 1, offset: 5, value: 0x7e, hex: "7E", desc: "固定结束符" },
+        ],
+        sampleFrame: "7E 01 00 00 7F 7E",
+      },
+      {
+        name: "车辆状态上报帧",
+        checksumAlg: "CRC16/MODBUS",
+        fields: [
+          { id: "v1", name: "帧头", type: "uint", size: 1, offset: 0, value: 0xaa, hex: "AA", desc: "固定起始符" },
+          { id: "v2", name: "命令字", type: "uint", size: 1, offset: 1, value: 0x02, desc: "02=状态" },
+          { id: "v3", name: "车辆得分", type: "uint", size: 2, offset: 2, value: 0, desc: "实时比赛得分" },
+          { id: "v4", name: "行走距离", type: "uint", size: 4, offset: 4, value: 0, desc: "行驶距离(米)" },
+          { id: "v5", name: "当前车速", type: "uint", size: 2, offset: 8, value: 20, desc: "速度(km/h)" },
+          { id: "v6", name: "CRC校验", type: "crc", size: 2, offset: 10, desc: "CRC16低字节先" },
+          { id: "v7", name: "帧尾", type: "uint", size: 1, offset: 12, value: 0x55, hex: "55", desc: "固定结束符" },
+        ],
+        sampleFrame: "AA 02 00 00 00 00 00 00 00 14 38 F7 55",
+      },
+    ],
+    caseName: `${prodName} 自动化自增测试`,
+    caseActions: [
+      {
+        protocolIndex: 0,
+        intervalMs: 1000,
+        fields: [{ fieldName: "心跳计数", step: 1, customInit: 0 }],
+      },
+      {
+        protocolIndex: 1,
+        intervalMs: 1000,
+        fields: [
+          { fieldName: "车辆得分", step: 1, customInit: 0 },
+          { fieldName: "行走距离", step: 10, customInit: 0 },
+        ],
+      },
+    ],
+    explanation: "本地离线生成：包含标准心跳保活帧与车辆状态上报帧，并预置了每秒得分+1与行走+10米的自动化测试用例。",
+  };
+}
+
+/** 远程 DeepSeek 生成整套产品与测试 */
+export async function remoteGenerateProductDraft(userPrompt: string, cfg: AiConfig): Promise<GeneratedProductDraft> {
+  const system = `你是嵌入式软硬件架构专家。请根据用户的一句话产品设想，设计该产品的完整串口通信方案。
+方案必须包含：
+1. 产品名称与子产品模块名称
+2. 2个通信协议（通常为心跳保活帧和状态交互帧，必须包含清晰的字段名、类型uint/int/bytes/crc、字节大小size、偏移offset、默认值value）
+3. 1个全自动测试用例（引用生成的协议，并在关键字段上配置每秒递增步长step）
+必须只返回纯 JSON，严禁输出任何 Markdown 标记或多余文字。
+JSON 格式：
+{
+  "productName": "产品名称",
+  "subProductName": "主模块MCU",
+  "protocols": [
+    {
+      "name": "协议名称",
+      "checksumAlg": "CRC16/MODBUS",
+      "fields": [
+        { "name": "帧头", "type": "uint", "size": 1, "offset": 0, "value": 126, "hex": "7E", "desc": "说明" },
+        { "name": "校验码", "type": "crc", "size": 2, "offset": 5, "desc": "CRC" }
+      ]
+    }
+  ],
+  "caseName": "自动化测试用例名称",
+  "caseActions": [
+    {
+      "protocolIndex": 1,
+      "intervalMs": 1000,
+      "fields": [{ "fieldName": "字段名", "step": 10, "customInit": 0 }]
+    }
+  ],
+  "explanation": "设计意图"
+}`;
+
+  const res = await fetch(`${cfg.baseUrl.replace(/\/$/, "")}/chat/completions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${cfg.apiKey}` },
+    body: JSON.stringify({
+      model: cfg.model,
+      temperature: 0.2,
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: `请设计产品：${userPrompt}` },
+      ],
+    }),
+  });
+
+  if (!res.ok) throw new Error(`DeepSeek 响应异常 ${res.status}：${(await res.text()).slice(0, 160)}`);
+  const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
+  const rawContent = data.choices?.[0]?.message?.content ?? "";
+  const jsonText = rawContent.replace(/```json/gi, "").replace(/```/g, "").trim();
+  const parsed = JSON.parse(jsonText) as GeneratedProductDraft;
+
+  // 格式化字段
+  const formattedProtocols = (parsed.protocols ?? []).map((p, pIdx) => {
+    let curOff = 0;
+    const flds: PdlField[] = (p.fields ?? []).map((f, fIdx) => {
+      const size = Number(f.size) || 1;
+      const off = typeof f.offset === "number" ? f.offset : curOff;
+      curOff = off + size;
+      return {
+        id: `f_${pIdx}_${fIdx}_${Date.now()}`,
+        name: f.name,
+        type: (["uint", "int", "float", "bool", "enum", "bytes", "crc", "reserved"].includes(f.type) ? f.type : "uint") as PdlField["type"],
+        size,
+        offset: off,
+        value: f.value ?? 0,
+        hex: f.hex,
+        desc: f.desc,
+      };
+    });
+    return {
+      name: p.name,
+      checksumAlg: (p.checksumAlg as ChecksumAlgorithm) || "CRC16/MODBUS",
+      fields: flds,
+      sampleFrame: p.sampleFrame,
+    };
+  });
+
+  return {
+    productName: parsed.productName || userPrompt,
+    subProductName: parsed.subProductName || "主控制器",
+    protocols: formattedProtocols,
+    caseName: parsed.caseName || `${parsed.productName} 自动化测试`,
+    caseActions: parsed.caseActions ?? [],
+    explanation: parsed.explanation || "由 DeepSeek 模型智能架构生成。",
+  };
+}
