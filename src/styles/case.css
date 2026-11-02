@@ -765,3 +765,14 @@
 .case-main-body::-webkit-scrollbar-thumb:hover {
   background: rgba(255, 255, 255, 0.22);
 }
+
+/* 关键：滚动区里的任务卡片不能被 flex 压缩，否则内容会被 overflow:hidden 裁掉 */
+.case-main-body > * {
+  flex: 0 0 auto;
+}
+
+/* 任务卡片头部：窄屏时换行，别把「选择下发协议:」挤成竖排 */
+.action-task-head {
+  flex-wrap: wrap;
+  row-gap: 6px;
+}

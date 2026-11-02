@@ -583,7 +583,7 @@ export function CasePage() {
                   />
 
                   {/* 核心：直接从我添加的协议列表中选！ */}
-                  <span style={{ fontSize: 11, color: "var(--t2)", marginLeft: 6, fontWeight: 500 }}>选择下发协议:</span>
+                  <span style={{ fontSize: 11, color: "var(--t2)", marginLeft: 6, fontWeight: 500, whiteSpace: "nowrap", flexShrink: 0 }}>选择下发协议:</span>
                   <select
                     className="cell-select"
                     style={{ height: 26, fontSize: 11, background: "var(--bg-panel-2)", border: "1px solid var(--accent)", color: "#fff", fontWeight: 600, borderRadius: 4, padding: "0 6px" }}
