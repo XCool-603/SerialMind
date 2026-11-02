@@ -614,6 +614,30 @@ export function CasePage() {
                     ))}
                   </select>
 
+                  {/* 协议里有多条报文时，允许选下发哪一条（否则永远只能发第一条） */}
+                  {(currentProto?.messages.length ?? 0) > 1 && (
+                    <>
+                      <span style={{ fontSize: 11, color: "var(--t2)", marginLeft: 6, fontWeight: 500, whiteSpace: "nowrap", flexShrink: 0 }}>报文:</span>
+                      <select
+                        className="cell-select"
+                        style={{ height: 26, fontSize: 11, background: "var(--bg-panel-2)", border: "1px solid var(--line-2)", color: "var(--t1)", fontWeight: 600, borderRadius: 4, padding: "0 6px" }}
+                        value={currentMsg?.id ?? ""}
+                        onChange={(e) => {
+                          const next = actions.map((a, i) =>
+                            i === actIdx ? { ...a, messageId: e.target.value, fields: [] } : a,
+                          );
+                          saveActions(next);
+                        }}
+                      >
+                        {currentProto?.messages.map((m) => (
+                          <option key={m.id} value={m.id}>
+                            {m.name}
+                          </option>
+                        ))}
+                      </select>
+                    </>
+                  )}
+
                   <span className="tag-mini" style={{ color: stepFieldCount > 0 ? "var(--green)" : "var(--accent)", fontSize: 10, marginLeft: 6 }}>
                     共 {currentMsg?.fields.filter((f) => f.type !== "crc" && f.offset >= 0).length ?? 0} 个字段 · {stepFieldCount} 个递增变化
                   </span>
