@@ -733,3 +733,35 @@
   color: #fff;
 }
 
+
+/* 中间主区：顶部（用例头/设置/控制台/任务标题）固定，任务区独立滚动 */
+.case-main-top {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 16px;
+}
+.case-main-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 4px 2px 16px 0;
+}
+.case-main-body::-webkit-scrollbar {
+  width: 8px;
+}
+.case-main-body::-webkit-scrollbar-track {
+  background: transparent;
+}
+.case-main-body::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 4px;
+}
+.case-main-body::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.22);
+}

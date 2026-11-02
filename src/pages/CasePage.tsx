@@ -268,7 +268,9 @@ export function CasePage() {
         </div>
 
         {/* 中间：纯图形化用例编排（免代码，100% 动态读取用户协议的字段） */}
-        <div className="case-main" style={{ overflowY: "auto", padding: "16px 20px" }}>
+        <div className="case-main" style={{ overflow: "hidden", padding: "0 20px" }}>
+          {/* 固定区：用例头 / 循环设置 / 实时控制台 / 任务标题 */}
+          <div className="case-main-top">
           {/* 用例顶栏 */}
           <div className="case-head" style={{ marginBottom: 14 }}>
             <div>
@@ -500,6 +502,11 @@ export function CasePage() {
               </button>
             )}
           </div>
+
+          </div>
+
+          {/* 滚动区：任务卡片 / 断言 / 底部操作（滚动条从这里开始） */}
+          <div className="case-main-body">
 
           {actions.length === 0 && (
             <div style={{ padding: "32px 20px", textAlign: "center", background: "var(--bg-panel-1)", border: "1px dashed var(--line-2)", borderRadius: 8, margin: "10px 0" }}>
@@ -918,6 +925,7 @@ export function CasePage() {
             </button>
           </div>
         </div>
+          </div>
 
         {/* 右侧：实时下发执行流水与报告 */}
         <div className="case-side" style={{ width: 340, display: "flex", flexDirection: "column" }}>
