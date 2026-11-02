@@ -63,6 +63,7 @@ export function CasePage() {
     requestStop,
     clearRuns,
     connection,
+    updateProtocol,
   } = useStore();
 
   const [query, setQuery] = useState("");
@@ -664,6 +665,26 @@ export function CasePage() {
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: 11, color: "var(--t3)", marginBottom: 4 }}>
                     <span>协议字段直接跟随「{currentProto?.name}」的实时定义（协议页增减字段或修改默认值自动生效）：</span>
                     <span style={{ color: "var(--t4)", fontSize: 10 }}>共 {currentMsg?.fields.filter((f) => f.type !== "crc" && f.offset >= 0).length ?? 0} 个可控字段</span>
+                    {(currentMsg?.fields.some((f) => f.hex) ?? false) && (
+                      <button
+                        className="btn sm"
+                        style={{ height: 20, fontSize: 9, padding: "0 6px", color: "var(--accent)" }}
+                        title="把这个报文里所有带固定 HEX 的字段一次性改成可填数值"
+                        onClick={() => {
+                          const protoId = currentProto?.id;
+                          if (!protoId) return;
+                          const target = useStore.getState().protocols.find((p) => p.id === protoId);
+                          if (!target) return;
+                          const messages = target.messages.map((m) => ({
+                            ...m,
+                            fields: m.fields.map((f) => (f.hex ? { ...f, hex: undefined, type: f.type === "bytes" ? "uint" : f.type } : f)),
+                          }));
+                          updateProtocol(protoId, { messages });
+                        }}
+                      >
+                        全部改为可填
+                      </button>
+                    )}
                   </div>
 
                   <div className="proto-field-table-wrap">
@@ -755,9 +776,27 @@ export function CasePage() {
                               </td>
                               <td>
                                 {isFixed ? (
-                                  <span style={{ fontSize: 11, fontFamily: "var(--font-mono, monospace)", color: "var(--t2)" }}>
-                                    {fld.hex}
-                                  </span>
+                                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                                    <span style={{ fontSize: 11, fontFamily: "var(--font-mono, monospace)", color: "var(--t2)" }}>{fld.hex}</span>
+                                    <button
+                                      className="btn sm"
+                                      style={{ height: 20, fontSize: 9, padding: "0 5px", color: "var(--accent)" }}
+                                      title="清掉这个字段的固定 HEX，改成可以填数值 / 设每秒增量"
+                                      onClick={() => {
+                                        const protoId = currentProto?.id;
+                                        if (!protoId) return;
+                                        const target = useStore.getState().protocols.find((p) => p.id === protoId);
+                                        if (!target) return;
+                                        const messages = target.messages.map((m) => ({
+                                          ...m,
+                                          fields: m.fields.map((f) => (f.id === fld.id ? { ...f, hex: undefined, type: f.type === "bytes" ? "uint" : f.type } : f)),
+                                        }));
+                                        updateProtocol(protoId, { messages });
+                                      }}
+                                    >
+                                      改为可填
+                                    </button>
+                                  </div>
                                 ) : isAuto ? (
                                   <span style={{ fontSize: 10, color: "var(--t3)" }}>
                                     {fld.auto ? "整帧长度 (自动)" : fld.valueExpr}

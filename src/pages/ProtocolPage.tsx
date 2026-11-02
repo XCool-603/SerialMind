@@ -266,8 +266,8 @@ export function ProtocolPage() {
       });
     }
 
-    if (f.type === "bytes") {
-      adv.push({ key: "hex", label: "固定字节HEX", value: f.hex ?? "", placeholder: "DE 21 09 F6 60（留空=可填数值）" });
+    if (f.type === "bytes" || f.hex) {
+      adv.push({ key: "hex", label: "固定字节HEX（留空=恢复成可填数值）", value: f.hex ?? "", placeholder: "DE 21 09 F6 60" });
     }
 
     if (f.type !== "crc" && f.type !== "bytes" && f.size > 1) {
