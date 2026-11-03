@@ -503,6 +503,15 @@ export function AiDraftPanel() {
                   {draft && <span className="tag-mini">{draft.protocol.messages[0].fields.length} 字段</span>}
                   <span className="spacer" />
                 </div>
+                {(draft?.issues?.length ?? 0) > 0 && (
+                  <div style={{ margin: "4px 0 8px", display: "flex", flexDirection: "column", gap: 3 }}>
+                    {draft!.issues.map((it, idx) => (
+                      <div key={idx} style={{ fontSize: 10, color: it.level === "error" ? "var(--red)" : it.level === "warn" ? "var(--amber, #eab308)" : "var(--green)" }}>
+                        {it.level === "error" ? "✗ " : it.level === "warn" ? "! " : "✓ "}{it.text}
+                      </div>
+                    ))}
+                  </div>
+                )}
                 <div className="ai-scroll">
                   {!draft ? (
                     <div className="ai-empty">还没有草稿 —— 先点左侧抽取按钮</div>

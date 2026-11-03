@@ -214,9 +214,110 @@ export function validateDraft(protocol: PdlProtocol, sample: number[]): DraftRes
 
 /* ---------------- 本地确定性抽取 ---------------- */
 
+const KEYWORDS = /^(byte|bytes|b|hex|bit|bits|uint|int|float|enum|bool|str|string|crc|abcd|badc|cdab|dcba|big|little|msb|lsb)$/i;
+
+/**
+ * 自由文本协议解析：支持中文说明 + 英文标识符 + N字节 的写法，例如
+ *   帧头 AA 55 固定2字节
+ *   命令码 cmd 1字节 01=启动 02=停止
+ *   电压 voltage 2字节 单位0.1V 大端
+ *   校验 CRC16/MODBUS 低字节在前
+ *   示例帧: AA 55 01 00 64 01 2C 3F 8E
+ */
+function extractLooseLines(text: string): PdlField[] | null {
+  const sample = extractSample(text);
+  const fields: PdlField[] = [];
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+
+  const pickName = (raw: string, idx: number): string => {
+    const words = (raw.match(/[A-Za-z_][A-Za-z0-9_]{1,24}/g) ?? []).filter(
+      (w) => !KEYWORDS.test(w) && !/^(CRC\d*|MODBUS|CCITT|XOR\d*|ADD\d*|LRC|BCC|ASCII|UTF8)$/i.test(w) && !/^[0-9A-Fa-f]{2}$/.test(w),
+    );
+    if (words.length) return words[0];
+    const zh = raw
+      .replace(/[A-Za-z0-9\s:：/.,，;；()（）、\-+*=]/g, "")
+      .replace(/(固定|字节|单位|大端|小端|低字节|高字节|在前|在后|自动|待确认|枚举|状态)/g, "")
+      .trim();
+    return zh.slice(0, 10) || `field${idx + 1}`;
+  };
+
+  for (const raw of lines) {
+    if (/^(示例帧|样例帧|sample|example)\s*[:：]/i.test(raw)) continue;
+
+    const mByte = raw.match(/(\d+)\s*(字节|byte|bytes|B)(?![A-Za-z0-9])/i);
+    const mBits = raw.match(/\b(?:u|s)?int(8|16|32|64)\b/i) ?? raw.match(/\bfloat(32|64)\b/i);
+    const isChecksum = /校验|checksum|crc\d*/i.test(raw);
+
+    if (!mByte && !mBits && !isChecksum) continue;
+
+    let size = 0;
+    if (mByte) size = Number(mByte[1]);
+    else if (mBits) size = Number(mBits[1]) / 8;
+    let type: PdlField["type"] = "uint";
+
+    if (isChecksum && !mByte && !mBits) {
+      type = "crc";
+      size = /crc32/i.test(raw) ? 4 : /xor8|add8|sum8|lrc|bcc/i.test(raw) ? 1 : 2;
+    } else if (isChecksum) {
+      type = "crc";
+    } else if (/枚举|状态|=\s*\w/.test(raw) && size === 1) {
+      type = "enum";
+    }
+
+    const hexM = raw.match(/\b((?:[0-9A-Fa-f]{2}\s+)+[0-9A-Fa-f]{2})\b/);
+    const isFixedHeader = /帧头|起始|同步|header|sof/i.test(raw) && !!hexM;
+
+    let name = pickName(raw, fields.length);
+    if (type === "crc") name = size === 4 ? "crc32" : size === 1 ? "crc8" : "crc16";
+    const byteOrder: PdlField["byteOrder"] | undefined =
+      size > 1 && type !== "crc"
+        ? /小端|DCBA|低字节在前|低字节先/i.test(raw)
+          ? "DCBA"
+          : "ABCD"
+        : undefined;
+
+    fields.push({
+      id: `${name}_${fields.length}`,
+      name,
+      type,
+      size,
+      offset: 0,
+      value: undefined,
+      byteOrder,
+      hex: isFixedHeader && hexM ? hexM[1].toUpperCase() : undefined,
+      valueFormat: size >= 2 ? "hex" : undefined,
+      desc: raw.slice(0, 40),
+    } as PdlField);
+  }
+
+  if (fields.length < 2) return null;
+
+  // 按出现顺序线性排布偏移
+  let off = 0;
+  for (const f of fields) {
+    f.offset = off;
+    off += f.size;
+  }
+
+  // 用样例帧填默认值（校验字段除外）
+  if (sample.length) {
+    for (const f of fields) {
+      if (f.type === "crc" || f.hex || !f.size) continue;
+      const slice = sample.slice(f.offset, f.offset + f.size);
+      if (slice.length !== f.size) continue;
+      const big = f.byteOrder !== "DCBA";
+      let v = 0;
+      for (let i = 0; i < slice.length; i++) {
+        v = v * 256 + (big ? slice[i] : slice[slice.length - 1 - i]);
+      }
+      f.value = v;
+    }
+  }
+  return fields;
+}
 export function localDraft(text: string): DraftResult {
   const sample = extractSample(text);
-  let fields = extractCStruct(text) ?? extractTable(text);
+  let fields = extractCStruct(text) ?? extractTable(text) ?? extractLooseLines(text);
 
   if (!fields || fields.length < 2) {
     // 完全无法抽取时，给出可编辑的骨架，而不是瞎编字段
@@ -255,7 +356,7 @@ export function localDraft(text: string): DraftResult {
 
   const result = validateDraft(protocol, sample);
   const issues = [...result.issues];
-  if (!extractCStruct(text) && !extractTable(text)) {
+  if (!extractCStruct(text) && !extractTable(text) && !extractLooseLines(text)) {
     issues.unshift({ level: "warn", text: "未能从文本中识别出字段表或 C 结构体，已给出骨架，请手动补全" });
   }
   return { ...result, issues };
