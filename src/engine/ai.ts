@@ -315,6 +315,60 @@ function extractLooseLines(text: string): PdlField[] | null {
   }
   return fields;
 }
+/**
+ * 自动合并成对的字节字段：
+ *   A相电压H + A相电压L  ->  A相电压 (2B, ABCD)
+ *   自动运行时间H + 自动运行时间L -> 2B
+ * 只合并「名字前缀相同、一个 H/高、一个 L/低、各 1 字节、位置相邻」的字段。
+ */
+function mergeBytePairs(fields: PdlField[]): PdlField[] {
+  const out: PdlField[] = [];
+  for (let i = 0; i < fields.length; i++) {
+    const a = fields[i];
+    const b = fields[i + 1];
+    if (!b) {
+      out.push(a);
+      continue;
+    }
+    const na = a.name.trim();
+    const nb = b.name.trim();
+    const isHigh = (n: string) => /H$|高$|[Hh]igh$/i.test(n);
+    const isLow = (n: string) => /L$|低$|[Ll]ow$/i.test(n);
+    const strip = (n: string) => n.replace(/(H|L|高|低|[Hh]igh|[Ll]ow)$/i, "").trim();
+
+    const sameBase = strip(na) === strip(nb) && strip(na) !== "";
+    const mergeable =
+      sameBase &&
+      a.type === "uint" &&
+      b.type === "uint" &&
+      a.size === 1 &&
+      b.size === 1 &&
+      !a.hex &&
+      !b.hex &&
+      isHigh(na) &&
+      isLow(nb);
+
+    if (mergeable) {
+      out.push({
+        ...a,
+        name: strip(na),
+        size: 2,
+        byteOrder: "ABCD",
+        desc: `${strip(na)}（由 ${na} + ${nb} 合并）`,
+      } as PdlField);
+      i++;
+      continue;
+    }
+    out.push(a);
+  }
+  // 重新排偏移
+  let off = 0;
+  for (const f of out) {
+    f.offset = off;
+    off += f.size;
+  }
+  return out;
+}
 /** 解析 Excel/TSV 粘贴的「多报文协议表」：每行一条报文，DATA1..DATAn 为字段 */
 function extractTsvMessages(text: string): PdlMessage[] | null {
   const lines = text.split(/\r?\n/);
@@ -357,7 +411,10 @@ function extractTsvMessages(text: string): PdlMessage[] | null {
       off += 1;
     }
 
-    msgs.push({ id: `m${mId}`, name: fnName, fields });
+    const merged = mergeBytePairs(fields);
+    let o2 = 0;
+    for (const f of merged) { f.offset = o2; o2 += f.size; }
+    msgs.push({ id: `m${mId}`, name: fnName, fields: merged });
   }
   return msgs.length ? msgs : null;
 }
