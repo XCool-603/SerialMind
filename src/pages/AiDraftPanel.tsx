@@ -7,6 +7,7 @@ import {
   loadAiConfig,
   saveAiConfig,
   testAiConfig,
+  listAiModels,
   resolveChatUrl,
   draftToProtocol,
   previewBytes,
@@ -75,6 +76,8 @@ export function AiDraftPanel() {
   const [showCfg, setShowCfg] = useState(false);
   const [testMsg, setTestMsg] = useState<{ ok: boolean; message: string } | null>(null);
   const [testing, setTesting] = useState(false);
+  const [modelList, setModelList] = useState<string[]>([]);
+  const [loadingModels, setLoadingModels] = useState(false);
   const [name, setName] = useState("AI 通信协议");
 
   const preview = useMemo(() => (draft ? previewBytes(draft) : "—"), [draft]);
@@ -719,6 +722,33 @@ export function AiDraftPanel() {
                   value={cfg.model}
                   onChange={(e) => setCfg({ ...cfg, model: e.target.value })}
                 />
+                <button
+                  className="btn sm"
+                  disabled={loadingModels}
+                  title="从 Base URL 的 /v1/models 拉取它支持的模型 id"
+                  onClick={async () => {
+                    setLoadingModels(true);
+                    const r = await listAiModels(cfg);
+                    setLoadingModels(false);
+                    if (r.ok) { setModelList(r.models); setTestMsg({ ok: true, message: r.message }); }
+                    else setTestMsg({ ok: false, message: r.message });
+                  }}
+                >
+                  {loadingModels ? "拉取中…" : "拉取模型"}
+                </button>
+                {modelList.length > 0 && (
+                  <select
+                    className="cell-select"
+                    style={{ height: 24, fontSize: 11, maxWidth: 200 }}
+                    value={modelList.includes(cfg.model) ? cfg.model : ""}
+                    onChange={(e) => setCfg({ ...cfg, model: e.target.value })}
+                  >
+                    <option value="">选模型…</option>
+                    {modelList.map((m) => (
+                      <option key={m} value={m}>{m}</option>
+                    ))}
+                  </select>
+                )}
               </div>
               <button
                 className="btn sm"

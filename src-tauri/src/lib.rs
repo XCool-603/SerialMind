@@ -37,10 +37,11 @@ struct HttpResp {
 
 /// 走 Rust 侧发 HTTP，绕开 WebView 的 CORS 限制（第三方中转站通常不给 CORS 头）
 #[tauri::command]
-async fn ai_http_post(
+async fn ai_http(
     url: String,
+    method: Option<String>,
     api_key: String,
-    body: String,
+    body: Option<String>,
     timeout_ms: Option<u64>,
 ) -> Result<HttpResp, String> {
     let ms = timeout_ms.unwrap_or(60_000).clamp(5_000, 180_000);
@@ -48,11 +49,20 @@ async fn ai_http_post(
         .timeout(Duration::from_millis(ms))
         .build()
         .map_err(|e| format!("创建 HTTP 客户端失败：{e}"))?;
-    let mut req = client.post(&url).header("Content-Type", "application/json");
+    let is_get = method.as_deref().unwrap_or("POST").eq_ignore_ascii_case("GET");
+    let mut req = if is_get {
+        client.get(&url)
+    } else {
+        client.post(&url).header("Content-Type", "application/json")
+    };
+    req = req.header("Accept", "application/json");
     if !api_key.trim().is_empty() {
         req = req.header("Authorization", format!("Bearer {}", api_key.trim()));
     }
-    let res = req.body(body).send().await.map_err(|e| {
+    if let Some(b) = body {
+        req = req.body(b);
+    }
+    let res = req.send().await.map_err(|e| {
         if e.is_timeout() {
             format!("请求超时（{ms}ms 无响应）：{url}")
         } else {
@@ -200,7 +210,7 @@ pub fn run() {
             open_port,
             write_port,
             close_port,
-            ai_http_post
+            ai_http
         ])
         .run(tauri::generate_context!())
         .expect("error while running SerialMind");

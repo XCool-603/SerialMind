@@ -295,16 +295,18 @@ async function aiFetch(
   apiKey: string,
   payload: unknown,
   timeoutMs = 60000,
+  method: "GET" | "POST" = "POST",
 ): Promise<{ ok: boolean; status: number; text: () => Promise<string>; json: () => Promise<unknown> }> {
   const w = window as unknown as { __TAURI_INTERNALS__?: unknown; __TAURI__?: unknown };
   const inTauri = Boolean(w.__TAURI_INTERNALS__ || w.__TAURI__);
   if (inTauri) {
     try {
       const core = await import("@tauri-apps/api/core");
-      const r = await core.invoke<{ status: number; body: string }>("ai_http_post", {
+      const r = await core.invoke<{ status: number; body: string }>("ai_http", {
         url,
+        method,
         apiKey: apiKey.trim(),
-        body: JSON.stringify(payload),
+        body: method === "GET" ? null : JSON.stringify(payload),
         timeoutMs,
       });
       return {
@@ -330,9 +332,9 @@ async function aiFetch(
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
     const res = await fetch(url, {
-      method: "POST",
+      method,
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey.trim()}` },
-      body: JSON.stringify(payload),
+      body: method === "GET" ? undefined : JSON.stringify(payload),
       signal: ctrl.signal,
     });
     return { ok: res.ok, status: res.status, text: () => res.text(), json: () => res.json() as Promise<unknown> };
@@ -347,6 +349,25 @@ export function resolveChatUrl(baseUrl: string): string {
   b = b.replace(/\/chat\/completions$/i, "");
   if (/^https?:\/\/[^/]+$/i.test(b)) b += "/v1";
   return `${b}/chat/completions`;
+}
+
+/** 拉取 /models 列表：第三方中转的模型 id 往往不是 deepseek-chat，必须先看它支持什么 */
+export async function listAiModels(cfg: AiConfig): Promise<{ ok: boolean; models: string[]; message: string }> {
+  if (!cfg.baseUrl.trim()) return { ok: false, models: [], message: "还没填 Base URL" };
+  const base = cfg.baseUrl.trim().replace(/\/+$/, "").replace(/\/chat\/completions$/i, "");
+  const url = `${base.replace(/\/v1$/, "")}/v1/models`;
+  try {
+    const res = await aiFetch(url, cfg.apiKey, undefined, 20000, "GET");
+    const text = await res.text();
+    if (!res.ok) return { ok: false, models: [], message: explainStatus(res.status, text, url) };
+    const data = JSON.parse(text) as { data?: { id?: string; is_default?: boolean }[] };
+    const list = (data.data ?? []).map((m) => m.id ?? "").filter(Boolean);
+    if (!list.length) return { ok: false, models: [], message: "这个地址没有返回任何模型" };
+    const def = (data.data ?? []).find((m) => m.is_default)?.id;
+    return { ok: true, models: list, message: `共 ${list.length} 个模型${def ? `，默认 ${def}` : ""}` };
+  } catch (e) {
+    return { ok: false, models: [], message: `读取模型列表失败：${String((e as Error).message ?? e)}` };
+  }
 }
 
 /** 把 HTTP 状态码翻译成能照着做的提示 */
