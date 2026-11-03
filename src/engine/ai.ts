@@ -301,6 +301,7 @@ function explainStatus(status: number, body: string, url: string): string {
   if (status === 403) return `HTTP 403 · 无权访问该模型，检查 Key 的权限或换成 deepseek-chat。(${brief})`;
   if (status === 404) return `HTTP 404 · 地址不对。当前请求 ${url}，Base URL 应填 https://api.deepseek.com 或 https://api.deepseek.com/v1（不要带 /chat/completions）。(${brief})`;
   if (status === 429) return `HTTP 429 · 请求太频繁或额度用尽，稍后再试。(${brief})`;
+  if (status === 502 || status === 504) return `HTTP ${status} · 中转/网关没有响应（服务挂了或上游不可用）。换 https://api.deepseek.com 或联系中转服务商。(${brief})`;
   if (status >= 500) return `HTTP ${status} · 服务端错误，稍后重试。(${brief})`;
   return `HTTP ${status} · ${brief}`;
 }
@@ -311,17 +312,32 @@ export async function testAiConfig(cfg: AiConfig): Promise<{ ok: boolean; messag
   if (!cfg.apiKey.trim()) return { ok: false, message: "还没填 API Key", ms: 0 };
   if (!cfg.baseUrl.trim()) return { ok: false, message: "还没填 Base URL", ms: 0 };
   try {
-    const res = await fetch(resolveChatUrl(cfg.baseUrl), {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${cfg.apiKey.trim()}` },
-      body: JSON.stringify({ model: cfg.model, max_tokens: 1, messages: [{ role: "user", content: "hi" }] }),
-    });
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 20000);
+    let res: Response;
+    try {
+      res = await fetch(resolveChatUrl(cfg.baseUrl), {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${cfg.apiKey.trim()}` },
+        body: JSON.stringify({ model: cfg.model, max_tokens: 1, messages: [{ role: "user", content: "hi" }] }),
+        signal: ctrl.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
     const ms = Math.round(performance.now() - t0);
     if (!res.ok) { const body = await res.text().catch(() => ""); return { ok: false, message: explainStatus(res.status, body, resolveChatUrl(cfg.baseUrl)), ms }; }
     const data = (await res.json()) as { model?: string };
     return { ok: true, message: `连通 · ${data.model ?? cfg.model} · ${ms}ms`, ms };
   } catch (e) {
-    return { ok: false, message: `网络错误：${String((e as Error).message ?? e)}（请求 ${resolveChatUrl(cfg.baseUrl)}；若开了代理/VPN 或离线请检查网络）`, ms: Math.round(performance.now() - t0) };
+    const aborted = (e as Error).name === "AbortError";
+      return {
+        ok: false,
+        message: aborted
+          ? `请求超时（20 秒无响应）：${resolveChatUrl(cfg.baseUrl)} 这个地址连上了但不回数据，通常是中转服务挂了。换 https://api.deepseek.com 试试。`
+          : `网络错误：${String((e as Error).message ?? e)}（请求 ${resolveChatUrl(cfg.baseUrl)}；若开了代理/VPN 或离线请检查网络）`,
+        ms: Math.round(performance.now() - t0),
+      };
   }
 }
 
