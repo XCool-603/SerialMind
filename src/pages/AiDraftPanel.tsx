@@ -7,6 +7,7 @@ import {
   loadAiConfig,
   saveAiConfig,
   testAiConfig,
+  resolveChatUrl,
   draftToProtocol,
   previewBytes,
   localGenerateCaseDraft,
@@ -742,6 +743,7 @@ export function AiDraftPanel() {
               >
                 保存配置
               </button>
+              <span style={{ fontSize: 10, color: "var(--t4)" }}>→ {resolveChatUrl(cfg.baseUrl)}</span>
               {testMsg && (
                 <span style={{ fontSize: 11, color: testMsg.ok ? "var(--green)" : "var(--red)" }}>
                   {testMsg.message}

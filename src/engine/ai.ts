@@ -285,23 +285,43 @@ export function saveAiConfig(c: AiConfig): void {
   localStorage.setItem(CFG_KEY, JSON.stringify(c));
 }
 
+/** 把用户填的 Base URL 归一化成 chat/completions 的完整地址 */
+export function resolveChatUrl(baseUrl: string): string {
+  let b = (baseUrl || "").trim().replace(/\/+$/, "");
+  b = b.replace(/\/chat\/completions$/i, "");
+  if (/^https?:\/\/[^/]+$/i.test(b)) b += "/v1";
+  return `${b}/chat/completions`;
+}
+
+/** 把 HTTP 状态码翻译成能照着做的提示 */
+function explainStatus(status: number, body: string, url: string): string {
+  const brief = body.replace(/\s+/g, " ").slice(0, 140);
+  if (status === 401) return `HTTP 401 · API Key 无效或已过期。去 platform.deepseek.com 重新生成，确认没有多余空格。(${brief})`;
+  if (status === 402) return `HTTP 402 · 账户余额不足。(${brief})`;
+  if (status === 403) return `HTTP 403 · 无权访问该模型，检查 Key 的权限或换成 deepseek-chat。(${brief})`;
+  if (status === 404) return `HTTP 404 · 地址不对。当前请求 ${url}，Base URL 应填 https://api.deepseek.com 或 https://api.deepseek.com/v1（不要带 /chat/completions）。(${brief})`;
+  if (status === 429) return `HTTP 429 · 请求太频繁或额度用尽，稍后再试。(${brief})`;
+  if (status >= 500) return `HTTP ${status} · 服务端错误，稍后重试。(${brief})`;
+  return `HTTP ${status} · ${brief}`;
+}
+
 /** 测试连接：发一条最小请求，验证 baseUrl / API Key / 模型名是否可用 */
 export async function testAiConfig(cfg: AiConfig): Promise<{ ok: boolean; message: string; ms: number }> {
   const t0 = performance.now();
   if (!cfg.apiKey.trim()) return { ok: false, message: "还没填 API Key", ms: 0 };
   if (!cfg.baseUrl.trim()) return { ok: false, message: "还没填 Base URL", ms: 0 };
   try {
-    const res = await fetch(`${cfg.baseUrl.replace(/\/$/, "")}/chat/completions`, {
+    const res = await fetch(resolveChatUrl(cfg.baseUrl), {
       method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${cfg.apiKey}` },
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${cfg.apiKey.trim()}` },
       body: JSON.stringify({ model: cfg.model, max_tokens: 1, messages: [{ role: "user", content: "hi" }] }),
     });
     const ms = Math.round(performance.now() - t0);
-    if (!res.ok) return { ok: false, message: `HTTP ${res.status}：${(await res.text()).slice(0, 160)}`, ms };
+    if (!res.ok) { const body = await res.text().catch(() => ""); return { ok: false, message: explainStatus(res.status, body, resolveChatUrl(cfg.baseUrl)), ms }; }
     const data = (await res.json()) as { model?: string };
     return { ok: true, message: `连通 · ${data.model ?? cfg.model} · ${ms}ms`, ms };
   } catch (e) {
-    return { ok: false, message: `网络错误：${String((e as Error).message ?? e)}`, ms: Math.round(performance.now() - t0) };
+    return { ok: false, message: `网络错误：${String((e as Error).message ?? e)}（请求 ${resolveChatUrl(cfg.baseUrl)}；若开了代理/VPN 或离线请检查网络）`, ms: Math.round(performance.now() - t0) };
   }
 }
 
@@ -314,9 +334,9 @@ JSON 结构：
 3. 字段偏移不得重叠，必须覆盖整帧。`;
 
 export async function remoteDraft(text: string, cfg: AiConfig): Promise<DraftResult> {
-  const res = await fetch(`${cfg.baseUrl.replace(/\/$/, "")}/chat/completions`, {
+  const res = await fetch(resolveChatUrl(cfg.baseUrl), {
     method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${cfg.apiKey}` },
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${cfg.apiKey.trim()}` },
     body: JSON.stringify({
       model: cfg.model,
       temperature: 0,
@@ -532,9 +552,9 @@ JSON 格式示例：
   "explanation": "简短设计意图"
 }`;
 
-  const res = await fetch(`${cfg.baseUrl.replace(/\/$/, "")}/chat/completions`, {
+  const res = await fetch(resolveChatUrl(cfg.baseUrl), {
     method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${cfg.apiKey}` },
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${cfg.apiKey.trim()}` },
     body: JSON.stringify({
       model: cfg.model,
       temperature: 0.1,
@@ -663,9 +683,9 @@ JSON 格式：
   "explanation": "设计意图"
 }`;
 
-  const res = await fetch(`${cfg.baseUrl.replace(/\/$/, "")}/chat/completions`, {
+  const res = await fetch(resolveChatUrl(cfg.baseUrl), {
     method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${cfg.apiKey}` },
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${cfg.apiKey.trim()}` },
     body: JSON.stringify({
       model: cfg.model,
       temperature: 0.2,
