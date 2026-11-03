@@ -285,6 +285,62 @@ export function saveAiConfig(c: AiConfig): void {
   localStorage.setItem(CFG_KEY, JSON.stringify(c));
 }
 
+/**
+ * 统一的 POST 出口：
+ * - 桌面版（Tauri）走 Rust 侧 reqwest，绕开 WebView 的 CORS 限制 —— 中转站基本都不给 CORS 头
+ * - 浏览器里仍然用 fetch
+ */
+async function aiFetch(
+  url: string,
+  apiKey: string,
+  payload: unknown,
+  timeoutMs = 60000,
+): Promise<{ ok: boolean; status: number; text: () => Promise<string>; json: () => Promise<unknown> }> {
+  const w = window as unknown as { __TAURI_INTERNALS__?: unknown; __TAURI__?: unknown };
+  const inTauri = Boolean(w.__TAURI_INTERNALS__ || w.__TAURI__);
+  if (inTauri) {
+    try {
+      const core = await import("@tauri-apps/api/core");
+      const r = await core.invoke<{ status: number; body: string }>("ai_http_post", {
+        url,
+        apiKey: apiKey.trim(),
+        body: JSON.stringify(payload),
+        timeoutMs,
+      });
+      return {
+        ok: r.status >= 200 && r.status < 300,
+        status: r.status,
+        text: async () => r.body,
+        json: async () => JSON.parse(r.body) as unknown,
+      };
+    } catch (e) {
+      // 老版本桌面端没有这个命令时，退回 fetch（会被 CORS 限制，但至少不是白屏）
+      const msg = String((e as Error)?.message ?? e);
+      if (!/not found|unknown command|Command .* not found/i.test(msg)) {
+        return {
+          ok: false,
+          status: 0,
+          text: async () => msg,
+          json: async () => JSON.parse("{}") as unknown,
+        };
+      }
+    }
+  }
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey.trim()}` },
+      body: JSON.stringify(payload),
+      signal: ctrl.signal,
+    });
+    return { ok: res.ok, status: res.status, text: () => res.text(), json: () => res.json() as Promise<unknown> };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** 把用户填的 Base URL 归一化成 chat/completions 的完整地址 */
 export function resolveChatUrl(baseUrl: string): string {
   let b = (baseUrl || "").trim().replace(/\/+$/, "");
@@ -312,19 +368,7 @@ export async function testAiConfig(cfg: AiConfig): Promise<{ ok: boolean; messag
   if (!cfg.apiKey.trim()) return { ok: false, message: "还没填 API Key", ms: 0 };
   if (!cfg.baseUrl.trim()) return { ok: false, message: "还没填 Base URL", ms: 0 };
   try {
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 20000);
-    let res: Response;
-    try {
-      res = await fetch(resolveChatUrl(cfg.baseUrl), {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${cfg.apiKey.trim()}` },
-        body: JSON.stringify({ model: cfg.model, max_tokens: 1, messages: [{ role: "user", content: "hi" }] }),
-        signal: ctrl.signal,
-      });
-    } finally {
-      clearTimeout(timer);
-    }
+    const res = await aiFetch(resolveChatUrl(cfg.baseUrl), cfg.apiKey, { model: cfg.model, max_tokens: 1, messages: [{ role: "user", content: "hi" }] }, 20000);
     const ms = Math.round(performance.now() - t0);
     if (!res.ok) { const body = await res.text().catch(() => ""); return { ok: false, message: explainStatus(res.status, body, resolveChatUrl(cfg.baseUrl)), ms }; }
     const data = (await res.json()) as { model?: string };
@@ -350,18 +394,14 @@ JSON 结构：
 3. 字段偏移不得重叠，必须覆盖整帧。`;
 
 export async function remoteDraft(text: string, cfg: AiConfig): Promise<DraftResult> {
-  const res = await fetch(resolveChatUrl(cfg.baseUrl), {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${cfg.apiKey.trim()}` },
-    body: JSON.stringify({
+  const res = await aiFetch(resolveChatUrl(cfg.baseUrl), cfg.apiKey, {
       model: cfg.model,
       temperature: 0,
       messages: [
         { role: "system", content: SYSTEM_PROMPT },
         { role: "user", content: text.slice(0, 12000) },
       ],
-    }),
-  });
+    }, 90000);
   if (!res.ok) throw new Error(`模型调用失败 ${res.status}：${(await res.text()).slice(0, 200)}`);
   const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
   const content = data.choices?.[0]?.message?.content ?? "";
@@ -568,18 +608,14 @@ JSON 格式示例：
   "explanation": "简短设计意图"
 }`;
 
-  const res = await fetch(resolveChatUrl(cfg.baseUrl), {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${cfg.apiKey.trim()}` },
-    body: JSON.stringify({
+  const res = await aiFetch(resolveChatUrl(cfg.baseUrl), cfg.apiKey, {
       model: cfg.model,
       temperature: 0.1,
       messages: [
         { role: "system", content: system },
         { role: "user", content: `请根据需求编排用例：${userPrompt}` },
       ],
-    }),
-  });
+    }, 90000);
 
   if (!res.ok) throw new Error(`DeepSeek 响应异常 ${res.status}：${(await res.text()).slice(0, 160)}`);
   const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
@@ -699,18 +735,14 @@ JSON 格式：
   "explanation": "设计意图"
 }`;
 
-  const res = await fetch(resolveChatUrl(cfg.baseUrl), {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${cfg.apiKey.trim()}` },
-    body: JSON.stringify({
+  const res = await aiFetch(resolveChatUrl(cfg.baseUrl), cfg.apiKey, {
       model: cfg.model,
       temperature: 0.2,
       messages: [
         { role: "system", content: system },
         { role: "user", content: `请设计产品：${userPrompt}` },
       ],
-    }),
-  });
+    }, 90000);
 
   if (!res.ok) throw new Error(`DeepSeek 响应异常 ${res.status}：${(await res.text()).slice(0, 160)}`);
   const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };

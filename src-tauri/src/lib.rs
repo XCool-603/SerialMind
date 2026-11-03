@@ -29,6 +29,41 @@ struct PortInfo {
     detail: String,
 }
 
+#[derive(Serialize)]
+struct HttpResp {
+    status: u16,
+    body: String,
+}
+
+/// 走 Rust 侧发 HTTP，绕开 WebView 的 CORS 限制（第三方中转站通常不给 CORS 头）
+#[tauri::command]
+async fn ai_http_post(
+    url: String,
+    api_key: String,
+    body: String,
+    timeout_ms: Option<u64>,
+) -> Result<HttpResp, String> {
+    let ms = timeout_ms.unwrap_or(60_000).clamp(5_000, 180_000);
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_millis(ms))
+        .build()
+        .map_err(|e| format!("创建 HTTP 客户端失败：{e}"))?;
+    let mut req = client.post(&url).header("Content-Type", "application/json");
+    if !api_key.trim().is_empty() {
+        req = req.header("Authorization", format!("Bearer {}", api_key.trim()));
+    }
+    let res = req.body(body).send().await.map_err(|e| {
+        if e.is_timeout() {
+            format!("请求超时（{ms}ms 无响应）：{url}")
+        } else {
+            format!("请求失败：{e}")
+        }
+    })?;
+    let status = res.status().as_u16();
+    let text = res.text().await.map_err(|e| format!("读取响应失败：{e}"))?;
+    Ok(HttpResp { status, body: text })
+}
+
 #[tauri::command]
 fn list_ports() -> Result<Vec<PortInfo>, String> {
     let ports = serialport::available_ports().map_err(|e| e.to_string())?;
@@ -164,7 +199,8 @@ pub fn run() {
             list_ports,
             open_port,
             write_port,
-            close_port
+            close_port,
+            ai_http_post
         ])
         .run(tauri::generate_context!())
         .expect("error while running SerialMind");
