@@ -130,13 +130,16 @@ export function AiDraftPanel() {
 
   const applyProtocol = () => {
     if (!draft) return;
-    applyDraft(draftToProtocol(draft, activeProductId, name.trim() || "AI 协议"));
+    const list = draft.protocols?.length
+      ? draft.protocols
+      : [draftToProtocol(draft, activeProductId, name.trim() || "AI 协议")];
+    for (const p of list) {
+      applyDraft({ ...p, productId: activeProductId, id: `${p.id}-${Math.random().toString(16).slice(2, 6)}` });
+    }
     setDraft(null);
     toggleAi();
     setView("protocol");
   };
-
-  /* ---------- 2. 自动化测试用例生成 ---------- */
   const runCaseLocal = () => {
     setErr("");
     setBusy(true);

@@ -18,6 +18,8 @@ export interface DraftIssue {
 }
 
 export interface DraftResult {
+  /** 多协议时：按数据头/方向自动分组后的全部协议（protocol 是第一个） */
+  protocols?: PdlProtocol[];
   protocol: PdlProtocol;
   sample: number[];
   roundTripOk: boolean;
@@ -370,9 +372,11 @@ function mergeBytePairs(fields: PdlField[]): PdlField[] {
   return out;
 }
 /** 解析 Excel/TSV 粘贴的「多报文协议表」：每行一条报文，DATA1..DATAn 为字段 */
-function extractTsvMessages(text: string): PdlMessage[] | null {
+type TsvGroups = { head: string; dir: string; names: string[] }[];
+function extractTsvMessages(text: string): { msgs: PdlMessage[]; groups: TsvGroups } | null {
   const lines = text.split(/\r?\n/);
   const msgs: PdlMessage[] = [];
+  const groups: TsvGroups = [];
   const stripMark = (s: string) => s.replace(/[①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳⑾⑿⒀⒁⒂⒃⒄⒅⒆⒇]|（\d+）|\(\d+\)/g, "").trim();
 
   for (const line of lines) {
@@ -415,28 +419,57 @@ function extractTsvMessages(text: string): PdlMessage[] | null {
     let o2 = 0;
     for (const f of merged) { f.offset = o2; o2 += f.size; }
     msgs.push({ id: `m${mId}`, name: fnName, fields: merged });
+
+    const key = head.toUpperCase();
+    const g = groups.find((x) => x.head === key);
+    if (g) {
+      g.names.push(fnName);
+      if (!g.dir && dir) g.dir = dir;
+    } else {
+      groups.push({ head: key, dir, names: [fnName] });
+    }
   }
-  return msgs.length ? msgs : null;
+  return msgs.length ? { msgs, groups } : null;
 }
+
 export function localDraft(text: string): DraftResult {
   const sample = extractSample(text);
-  // 多报文表格（Excel 粘贴）优先
-  const tsvMsgs = extractTsvMessages(text);
-  if (tsvMsgs) {
-    const proto: PdlProtocol = {
-      ...BINARY_PROTOCOL,
-      id: `draft-${Date.now()}`,
-      name: "AI 草稿协议",
-      version: "v1",
-      checksum: { algorithm: "ADD8", from: 0, to: "len-1", endian: "little" },
-      messages: tsvMsgs,
-      sampleFrame: sample.length ? toHex(sample) : "",
-      updatedAt: "刚刚",
-    };
+
+  // 多报文表格（Excel 粘贴）：按「数据头」自动拆成多个协议
+  const tsv = extractTsvMessages(text);
+  if (tsv) {
+    const byHead = new Map<string, PdlMessage[]>();
+    for (const m of tsv.msgs) {
+      const h = (m.fields[0]?.hex ?? "??").toUpperCase();
+      if (!byHead.has(h)) byHead.set(h, []);
+      byHead.get(h)!.push(m);
+    }
+    const protos: PdlProtocol[] = [];
+    let idx = 0;
+    for (const [head, list] of byHead) {
+      const dir = tsv.groups.find((g) => g.head === head)?.dir ?? "";
+      protos.push({
+        ...BINARY_PROTOCOL,
+        id: `draft-${Date.now()}-${idx++}`,
+        name: dir ? dir.replace(/\s*->\s*/g, " → ").trim() : `协议 ${head}`,
+        version: "v1",
+        checksum: { algorithm: "ADD8", from: 0, to: "len-1", endian: "little" },
+        messages: list,
+        sampleFrame: sample.length ? toHex(sample) : "",
+        updatedAt: "刚刚",
+      });
+    }
+    const first = protos[0];
     return {
-      ...validateDraft(proto, sample),
+      ...validateDraft(first, sample),
+      protocols: protos,
       issues: [
-        { level: "info", text: `识别到 ${tsvMsgs.length} 条报文（每行一条）；校验算法按「累加和 ADD8」猜测，请在协议页确认` },
+        {
+          level: "info",
+          text: `识别到 ${protos.length} 个协议 / ${tsv.msgs.length} 条报文：${protos
+            .map((p) => `${p.name}（${p.messages.length} 条）`)
+            .join("、")}。按数据头自动分组；校验算法按「累加和 ADD8」猜测，请在协议页确认`,
+        },
       ],
     };
   }
