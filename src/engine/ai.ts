@@ -351,7 +351,9 @@ export function resolveChatUrl(baseUrl: string): string {
 
 /** 把 HTTP 状态码翻译成能照着做的提示 */
 function explainStatus(status: number, body: string, url: string): string {
-  const brief = body.replace(/\s+/g, " ").slice(0, 140);
+  const brief = body.replace(/\s+/g, " ").slice(0, 200);
+  // status 0 = 底层请求没拿到任何响应（超时/连不上），直接给原因，别加 "HTTP 0"
+  if (status === 0) return `${brief}　—— 网络层面没拿到响应。先在浏览器确认这个地址能打开，再确认服务商在线。`;
   if (status === 401) return `HTTP 401 · API Key 无效或已过期。去 platform.deepseek.com 重新生成，确认没有多余空格。(${brief})`;
   if (status === 402) return `HTTP 402 · 账户余额不足。(${brief})`;
   if (status === 403) return `HTTP 403 · 无权访问该模型，检查 Key 的权限或换成 deepseek-chat。(${brief})`;
