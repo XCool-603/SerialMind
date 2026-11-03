@@ -379,6 +379,9 @@ function explainStatus(status: number, body: string, url: string): string {
   if (status === 402) return `HTTP 402 · 账户余额不足。(${brief})`;
   if (status === 403) return `HTTP 403 · 无权访问该模型，检查 Key 的权限或换成 deepseek-chat。(${brief})`;
   if (status === 404) return `HTTP 404 · 地址不对。当前请求 ${url}，Base URL 应填 https://api.deepseek.com 或 https://api.deepseek.com/v1（不要带 /chat/completions）。(${brief})`;
+  if (/no_healthy_account/i.test(body)) {
+    return `HTTP 503 · no_healthy_account：中转站后端账号池里没有可用账号（不是你的 Key 或地址问题，Key 已验证有效）。换官方 https://api.deepseek.com，或把这个错误发给中转服务商。(${brief})`;
+  }
   if (status === 429) return `HTTP 429 · 请求太频繁或额度用尽，稍后再试。(${brief})`;
   if (status === 502 || status === 504) return `HTTP ${status} · 中转/网关没有响应（服务挂了或上游不可用）。换 https://api.deepseek.com 或联系中转服务商。(${brief})`;
   if (status >= 500) return `HTTP ${status} · 服务端错误，稍后重试。(${brief})`;
