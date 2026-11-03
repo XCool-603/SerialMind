@@ -315,8 +315,75 @@ function extractLooseLines(text: string): PdlField[] | null {
   }
   return fields;
 }
+/** 解析 Excel/TSV 粘贴的「多报文协议表」：每行一条报文，DATA1..DATAn 为字段 */
+function extractTsvMessages(text: string): PdlMessage[] | null {
+  const lines = text.split(/\r?\n/);
+  const msgs: PdlMessage[] = [];
+  const stripMark = (s: string) => s.replace(/[①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳⑾⑿⒀⒁⒂⒃⒄⒅⒆⒇]|（\d+）|\(\d+\)/g, "").trim();
+
+  for (const line of lines) {
+    if (!line.includes("\t")) continue;
+    const cells = line.split("\t").map((c) => c.trim());
+    if (cells.length < 8) continue;
+    const cmd = cells[6];
+    if (!/^0x[0-9A-Fa-f]{2}$/.test(cmd)) continue;
+
+    const head = cells[2].replace(/[^0-9A-Fa-f]/g, "");
+    const headInv = cells[3].replace(/[^0-9A-Fa-f]/g, "");
+    const dir = cells[0];
+    const fnName = stripMark(cells[1] || "") || `指令${cmd}`;
+    if (!head || head.length !== 2) continue;
+
+    const mId = msgs.length;
+    const fields: PdlField[] = [
+      { id: `h${mId}`, name: "head", type: "bytes", size: 1, offset: 0, hex: head.toUpperCase(), desc: `数据头（${dir || "固定"}）` },
+      { id: `hi${mId}`, name: "headInv", type: "bytes", size: 1, offset: 1, hex: headInv.toUpperCase(), desc: "头反码" },
+      { id: `len${mId}`, name: "len", type: "uint", size: 1, offset: 2, auto: "frameLength", desc: "数据长度（自动）" },
+      { id: `li${mId}`, name: "lenInv", type: "uint", size: 1, offset: 3, valueExpr: "0xFF - len", desc: "长度反码（自动）" },
+      { id: `c${mId}`, name: "cmd", type: "uint", size: 1, offset: 4, value: parseInt(cmd, 16), desc: `指令 ${cmd}` },
+    ] as PdlField[];
+
+    let off = 5;
+    let seq = 0;
+    for (let i = 7; i < cells.length; i++) {
+      const c = cells[i];
+      if (!c) continue;
+      if (/^校验和?$/.test(c)) {
+        fields.push({ id: `s${mId}`, name: "sum", type: "crc", size: 1, offset: off, desc: "校验和（累加和，待确认算法）" } as PdlField);
+        break;
+      }
+      const nm = stripMark(c) || `data${++seq}`;
+      fields.push({ id: `d${mId}_${i}`, name: nm.slice(0, 12), type: "uint", size: 1, offset: off, desc: c } as PdlField);
+      off += 1;
+    }
+
+    msgs.push({ id: `m${mId}`, name: fnName, fields });
+  }
+  return msgs.length ? msgs : null;
+}
 export function localDraft(text: string): DraftResult {
   const sample = extractSample(text);
+  // 多报文表格（Excel 粘贴）优先
+  const tsvMsgs = extractTsvMessages(text);
+  if (tsvMsgs) {
+    const proto: PdlProtocol = {
+      ...BINARY_PROTOCOL,
+      id: `draft-${Date.now()}`,
+      name: "AI 草稿协议",
+      version: "v1",
+      checksum: { algorithm: "ADD8", from: 0, to: "len-1", endian: "little" },
+      messages: tsvMsgs,
+      sampleFrame: sample.length ? toHex(sample) : "",
+      updatedAt: "刚刚",
+    };
+    return {
+      ...validateDraft(proto, sample),
+      issues: [
+        { level: "info", text: `识别到 ${tsvMsgs.length} 条报文（每行一条）；校验算法按「累加和 ADD8」猜测，请在协议页确认` },
+      ],
+    };
+  }
+
   let fields = extractCStruct(text) ?? extractTable(text) ?? extractLooseLines(text);
 
   if (!fields || fields.length < 2) {
@@ -528,7 +595,7 @@ export async function remoteDraft(text: string, cfg: AiConfig): Promise<DraftRes
         { role: "system", content: SYSTEM_PROMPT },
         { role: "user", content: text.slice(0, 12000) },
       ],
-    }, 90000);
+    }, 45000);
   if (!res.ok) throw new Error(`模型调用失败 ${res.status}：${(await res.text()).slice(0, 200)}`);
   const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
   const content = data.choices?.[0]?.message?.content ?? "";
@@ -742,7 +809,7 @@ JSON 格式示例：
         { role: "system", content: system },
         { role: "user", content: `请根据需求编排用例：${userPrompt}` },
       ],
-    }, 90000);
+    }, 45000);
 
   if (!res.ok) throw new Error(`DeepSeek 响应异常 ${res.status}：${(await res.text()).slice(0, 160)}`);
   const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
@@ -869,7 +936,7 @@ JSON 格式：
         { role: "system", content: system },
         { role: "user", content: `请设计产品：${userPrompt}` },
       ],
-    }, 90000);
+    }, 45000);
 
   if (!res.ok) throw new Error(`DeepSeek 响应异常 ${res.status}：${(await res.text()).slice(0, 160)}`);
   const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
