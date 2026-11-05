@@ -574,6 +574,13 @@ export function localDraft(text: string): DraftResult {
 
   let fields = extractCStruct(text) ?? extractTable(text) ?? extractLooseLines(text);
 
+  // 垃圾结果保护：解析出来大部分是 crc / 没有可读名字，说明认错了，退回骨架并提示
+  if (fields && fields.length >= 2) {
+    const crcLike = fields.filter((f) => f.type === "crc").length;
+    const named = fields.filter((f) => f.name && !/^crc\d*$/i.test(f.name)).length;
+    if (crcLike > fields.length / 2 || named === 0) fields = null;
+  }
+
   if (!fields || fields.length < 2) {
     // 完全无法抽取时，给出可编辑的骨架，而不是瞎编字段
     fields = [
@@ -775,7 +782,7 @@ JSON 结构：
 2. 每个字段必须给 sourceSpan 与 confidence。
 3. 字段偏移不得重叠，必须覆盖整帧。`;
 /** 发一轮对话，拿回 content 文本（自包含 prompt，适配丢 system 的中转站） */
-async function chatContent(cfg: AiConfig, messages: unknown[], timeoutMs = 25000): Promise<string> {
+async function chatContent(cfg: AiConfig, messages: unknown[], timeoutMs = 60000): Promise<string> {
   const res = await aiFetch(resolveChatUrl(cfg.baseUrl), cfg.apiKey, {
     model: cfg.model,
     temperature: 0,
@@ -787,7 +794,7 @@ async function chatContent(cfg: AiConfig, messages: unknown[], timeoutMs = 25000
 }
 
 /** 要模型输出 JSON：第一次不合格就带上它的回复再要一次，明确「只输出 JSON」 */
-async function chatJson(cfg: AiConfig, messages: unknown[], timeoutMs = 25000): Promise<{ value: unknown; error?: string }> {
+async function chatJson(cfg: AiConfig, messages: unknown[], timeoutMs = 60000): Promise<{ value: unknown; error?: string }> {
   const first = await chatContent(cfg, messages, timeoutMs);
   const picked = extractJsonBlock(first);
   if (picked.value) return picked;

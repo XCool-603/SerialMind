@@ -73,6 +73,17 @@ export function AiDraftPanel() {
   const [busy, setBusy] = useState(false);
   /** 远程生成时的即时提示：点下去立刻有反馈，别像卡死 */
   const [progress, setProgress] = useState<string | null>(null);
+  /** 远程请求已等待秒数：让「没反应」变成「正在跑」 */
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    if (!progress) {
+      setElapsed(0);
+      return;
+    }
+    const t0 = Date.now();
+    const id = setInterval(() => setElapsed(Math.round((Date.now() - t0) / 1000)), 500);
+    return () => clearInterval(id);
+  }, [progress]);
   const [err, setErr] = useState("");
   const [cfg, setCfg] = useState<AiConfig>(() => loadAiConfig());
   const [showCfg, setShowCfg] = useState(false);
@@ -110,7 +121,7 @@ export function AiDraftPanel() {
 
   const runProtocolRemote = async () => {
     setErr("");
-    setProgress(`正在请求 ${resolveChatUrl(cfg.baseUrl)} …（最多 25 秒，失败会自动回退本地抽取）`);
+    setProgress(`正在请求 ${resolveChatUrl(cfg.baseUrl)} …（最多 60 秒，失败会自动回退本地抽取）`);
     if (!cfg.apiKey.trim()) {
       setErr("未配置 API Key：可在下方「DeepSeek 模型设置」中填写，或使用本地确定性抽取");
       setShowCfg(true);
@@ -160,7 +171,7 @@ export function AiDraftPanel() {
 
   const runCaseRemote = async () => {
     setErr("");
-    setProgress(`正在请求 ${resolveChatUrl(cfg.baseUrl)} …（最多 25 秒，失败会自动回退本地规则）`);
+    setProgress(`正在请求 ${resolveChatUrl(cfg.baseUrl)} …（最多 60 秒，失败会自动回退本地规则）`);
     if (!cfg.apiKey.trim()) {
       setErr("未配置 DeepSeek API Key，已为您使用本地离线规则引擎生成");
       runCaseLocal();
@@ -226,7 +237,7 @@ export function AiDraftPanel() {
 
   const runProductRemote = async () => {
     setErr("");
-    setProgress(`正在请求 ${resolveChatUrl(cfg.baseUrl)} …（最多 25 秒，失败会自动回退本地规则）`);
+    setProgress(`正在请求 ${resolveChatUrl(cfg.baseUrl)} …（最多 60 秒，失败会自动回退本地规则）`);
     if (!cfg.apiKey.trim()) {
       setErr("未配置 DeepSeek API Key，已为您使用本地离线方案架构引擎");
       runProductLocal();
@@ -705,7 +716,7 @@ export function AiDraftPanel() {
         {progress && (
           <div className="ai-err" style={{ color: "var(--accent)" }}>
             <Icon cp={IC.history} size={11} color="var(--accent)" />
-            <span>{progress}</span>
+            <span>{progress} 已等待 {elapsed} 秒</span>
           </div>
         )}
 
