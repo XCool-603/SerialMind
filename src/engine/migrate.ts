@@ -65,6 +65,7 @@ CREATE TABLE IF NOT EXISTS case_item (
   steps_json TEXT,
   yaml TEXT,
   data_source TEXT,
+  actions_json TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   rev INTEGER NOT NULL DEFAULT 1,
@@ -226,6 +227,8 @@ export function migrate(d: Database): void {
   addCol("protocol", "subproduct_id");
   addCol("case_item", "subproduct_id");
   addCol("case_item", "role_id");
+  addCol("case_item", "data_source", "TEXT");
+  addCol("case_item", "actions_json", "TEXT");
   addCol("rule", "subproduct_id");
   addCol("suite", "tag");
   // 拖拽排序

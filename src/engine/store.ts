@@ -492,11 +492,8 @@ export const useStore = create<State>((set, get) => {
         }
         const w = loadWorkspace();
         const products = w.products;
-        if (!products.length) {
-          set({ dbStatus: "ready", serialMsg: "数据库已就绪 —— 先新建一个产品" });
-          return;
-        }
-        const activeProductId = products[0].id;
+
+        // 新版是扁平结构（协议 / 用例直接挂在工作空间），没有产品也要把数据装回来
         const protocols: PdlProtocol[] = w.protocols.map((p) => {
           try {
             return { ...(JSON.parse(p.pdlJson) as PdlProtocol), productId: p.productId, subProductId: p.subProductId, version: p.version, name: p.name };
@@ -504,6 +501,27 @@ export const useStore = create<State>((set, get) => {
             return { ...CRANE_PROTOCOL, id: p.id, name: p.name, version: p.version, productId: p.productId, subProductId: p.subProductId };
           }
         });
+
+        if (!products.length) {
+          set({
+            dbStatus: "ready",
+            products: [],
+            protocols,
+            activeProtocolId: protocols[0]?.id ?? "",
+            subProducts: w.subProducts,
+            activeSubProductId: w.subProducts[0]?.id ?? "",
+            roles: w.roles,
+            activeRoleId: w.roles[0]?.id ?? "",
+            cases: w.cases,
+            activeCaseId: w.cases[0]?.id ?? "",
+            suites: w.suites,
+            activeSuiteId: w.suites[0]?.id ?? "",
+            runs: loadRuns(200),
+            serialMsg: `已载入：${protocols.length} 协议 · ${w.cases.length} 用例`,
+          });
+          return;
+        }
+        const activeProductId = products[0].id;
         for (const p of products) {
           buckets[p.id] = {
             subProducts: w.subProducts.filter((x) => x.productId === p.id),

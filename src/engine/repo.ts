@@ -83,6 +83,7 @@ export function loadWorkspace(): Workspace {
       stepCount: steps.length,
       assertionCount: steps.filter((s) => s.kind === "expect" || s.kind === "assertNo").length,
       dataDriven: r.data_source ? String(r.data_source) : undefined,
+      actions: safeJson<CaseItem["actions"]>(r.actions_json, []) as CaseItem["actions"],
       steps,
       yaml: String(r.yaml ?? ""),
     };
@@ -116,7 +117,8 @@ export function loadWorkspace(): Workspace {
 }
 
 export function isEmpty(): boolean {
-  return tableCount("product") === 0;
+  // 新版是扁平结构：没有产品也可能有协议 / 用例，不能只看产品表
+  return tableCount("product") === 0 && tableCount("protocol") === 0 && tableCount("case_item") === 0;
 }
 
 /* ---------------- 写入（整体覆盖，数据量小、事务保证原子） ---------------- */
@@ -168,8 +170,8 @@ export function saveWorkspace(w: Workspace): void {
     for (const c of w.cases) {
       const sub = w.subProducts.find((s) => s.id === c.subProductId);
       run(
-        `INSERT INTO case_item (id, product_id, subproduct_id, role_id, tenant_id, name, tags, steps_json, yaml, data_source, created_at, updated_at, rev)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,1)`,
+        `INSERT INTO case_item (id, product_id, subproduct_id, role_id, tenant_id, name, tags, steps_json, yaml, data_source, actions_json, created_at, updated_at, rev)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,1)`,
         [
           c.id,
           sub?.productId ?? "",
@@ -181,6 +183,7 @@ export function saveWorkspace(w: Workspace): void {
           JSON.stringify(c.steps),
           c.yaml,
           c.dataDriven ?? null,
+          JSON.stringify(c.actions ?? []),
           now,
           now,
         ],
