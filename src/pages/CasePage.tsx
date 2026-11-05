@@ -72,13 +72,26 @@ export function CasePage() {
   const [collapsedActions, setCollapsedActions] = useState<Record<string, boolean>>({});
   /** 「清空流水」后要真的清空显示，包括上一次运行的结果 */
   const [streamHidden, setStreamHidden] = useState(false);
+  /** 自动保存提示：改动即落库，这里只是让用户看得见 */
+  const [savedAt, setSavedAt] = useState("");
+  const firstSaveRef = useRef(true);
 
   const active = cases.find((c) => c.id === activeCaseId) ?? cases[0];
 
   // 切换用例时恢复流水显示
   useEffect(() => {
     setStreamHidden(false);
+    setSavedAt("");
   }, [active?.id]);
+
+  // 用例任何改动都会自动落库，给个可见反馈
+  useEffect(() => {
+    if (firstSaveRef.current) {
+      firstSaveRef.current = false;
+      return;
+    }
+    setSavedAt(new Date().toLocaleTimeString());
+  }, [active]);
 
   useEffect(() => {
     if (running && liveStreamEndRef.current) {
@@ -297,6 +310,11 @@ export function CasePage() {
                 <span className="tag-mini" style={{ background: "rgba(88, 166, 255, 0.15)", color: "var(--accent)" }}>
                   可用协议: {protocols.length} 个
                 </span>
+                {savedAt && (
+                  <span className="tag-mini" style={{ color: "var(--green)" }} title="改动会自动写入本地数据库，不需要点保存">
+                    已自动保存 {savedAt}
+                  </span>
+                )}
               </div>
             </div>
 
