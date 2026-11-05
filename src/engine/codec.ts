@@ -3,6 +3,11 @@ import { computeChecksum, checksumSize as checksumSizeOf } from "./crc";
 import { evalExpr } from "./expr";
 import { messageLength, type PdlField, type PdlMessage, type PdlProtocol } from "./pdl";
 
+/** 表达式里的中文长度字段名换成 ASCII 标识符（表达式解析器只认 [A-Za-z_]） */
+function normalizeExpr(expr: string | undefined): string | undefined {
+  if (!expr) return expr;
+  return expr.replace(/数据长度|帧长度|长度字段|报文长度|长度/g, "len");
+}
 export interface DecodedField {
   field: PdlField;
   raw: number[];
@@ -32,13 +37,13 @@ export function resolveLayout(msg: PdlMessage, frameLen: number, vars: Record<st
 
     let size = f.size;
     if (f.sizeExpr) {
-      const v = evalExpr(f.sizeExpr, env);
+      const v = evalExpr(normalizeExpr(f.sizeExpr) as string, env);
       size = v === null ? 0 : Math.max(0, Math.round(v));
     }
 
     let offset: number;
     if (f.offsetExpr) {
-      const v = evalExpr(f.offsetExpr, env);
+      const v = evalExpr(normalizeExpr(f.offsetExpr) as string, env);
       offset = v === null ? cursor : Math.max(0, Math.round(v));
     } else if (f.offset >= cursor) {
       offset = f.offset;
@@ -67,7 +72,10 @@ export function encodeMessage(
   values: Record<string, number | string | boolean> = {},
 ): number[] {
   // 有「自动整帧长度」字段时：帧长 = 各字段长度之和
-  const autoField = msg.fields.find((f) => f.auto === "frameLength");
+  const isLenName = (nm: string) => /^(len|length|len_field|数据长度|长度|帧长度)$/i.test(nm.trim());
+  const hasVarField = msg.fields.some((f) => f.sizeExpr);
+  // 用户起的名字是「数据长度 / 长度」时，也按自动帧长处理，省得手改长度
+  const autoField = msg.fields.find((f) => f.auto === "frameLength") ?? (!hasVarField ? msg.fields.find((f) => isLenName(f.name) && f.type !== "crc") : undefined);
   // 帧长：定长直接用；变长取 len 字段值
   let frameLen = messageLength(msg);
   if (autoField) {
@@ -94,7 +102,7 @@ export function encodeMessage(
   const crcResolved = crcField ? layout.find((l) => l.field.id === crcField.id) : undefined;
 
   // 先填非校验字段（计算字段按顺序用已写入的值求值）
-  const env: Record<string, number> = { len: frameLen };
+  const env: Record<string, number> = { len: frameLen, length: frameLen, 数据长度: frameLen, 长度: frameLen, 帧长度: frameLen };
   for (const { field: f, offset, size } of layout) {
     if (f.type === "crc" || size <= 0) continue;
     // 固定字节字段：直接写 HEX
@@ -106,7 +114,7 @@ export function encodeMessage(
     // 计算字段：值由表达式算出（如长度反码 0xFF - len）
     let num: number;
     if (f.valueExpr) {
-      const v = evalExpr(f.valueExpr, env);
+      const v = evalExpr(normalizeExpr(f.valueExpr) as string, env);
       num = v === null ? 0 : Math.round(v);
     } else {
       const raw = values[f.name] !== undefined ? values[f.name] : f.value ?? 0;
@@ -295,10 +303,10 @@ export function decodeFrame(proto: PdlProtocol, bytes: number[]): DecodeResult {
   const msg = detectMessage(proto, bytes) ?? proto.messages[0];
   const frameLen = bytes.length;
   const layout = msg ? resolveLayout(msg, frameLen) : [];
+  const autoField = msg ? msg.fields.find((f) => f.auto === "frameLength") ?? msg.fields.find((f) => /^(len|length|数据长度|长度|帧长度)$/i.test(f.name) && f.type !== "crc" && !msg.fields.some((g) => g.sizeExpr)) : undefined;
   const fields = layout.map((l) => decodeOne(l.field, bytes, l.offset, l.size));
 
   // 自动整帧长度字段：解出的值应等于实际帧长
-  const autoField = msg.fields.find((f) => f.auto === "frameLength");
   if (autoField) {
     const af = fields.find((x) => x.field.id === autoField.id);
     if (af) {
@@ -309,13 +317,13 @@ export function decodeFrame(proto: PdlProtocol, bytes: number[]): DecodeResult {
   }
 
   // 计算字段（如长度反码 FF-len）：用已解出的值算一遍，和实际字节比对
-  const env: Record<string, number> = { len: frameLen };
+  const env: Record<string, number> = { len: frameLen, length: frameLen, 数据长度: frameLen, 长度: frameLen, 帧长度: frameLen };
   for (const f of fields) {
     if (typeof f.value === "number") env[f.field.name] = f.value;
   }
   for (const f of fields) {
     if (!f.field.valueExpr) continue;
-    const expect = evalExpr(f.field.valueExpr, env);
+    const expect = evalExpr(normalizeExpr(f.field.valueExpr) as string, env);
     if (expect === null) continue;
     const actual = Number(f.value);
     const same = Math.round(expect) === actual;
