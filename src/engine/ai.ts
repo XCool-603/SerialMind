@@ -228,7 +228,7 @@ const KEYWORDS = /^(byte|bytes|b|hex|bit|bits|uint|int|float|enum|bool|str|strin
  */
 function extractLooseLines(text: string): PdlField[] | null {
   const sample = extractSample(text);
-  const fields: PdlField[] = [];
+  let fields: PdlField[] = [];
   const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
 
   const pickName = (raw: string, idx: number): string => {
@@ -293,6 +293,7 @@ function extractLooseLines(text: string): PdlField[] | null {
   }
 
   if (fields.length < 2) return null;
+  fields = enrichFields(mergeBytePairs(fields), text);
 
   // 按出现顺序线性排布偏移
   let off = 0;
@@ -317,6 +318,103 @@ function extractLooseLines(text: string): PdlField[] | null {
   }
   return fields;
 }
+/* ---------------- 从文档「说明区」补全字段语义（枚举 / 位段 / 缩放 / 默认值） ---------------- */
+
+const normName = (s: string) =>
+  s
+    .replace(/[①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳⑾⑿⒀⒁⒂⒃⒄⒅⒆⒇]/g, "")
+    .replace(/[（(]\s*\d+\s*[)）]/g, "")
+    .replace(/[：:、，,。.\s]/g, "")
+    .replace(/[Hh]$|高$/, "")
+    .replace(/[Ll]$|低$/, "")
+    .trim();
+
+interface FieldMeta {
+  enumMap?: Record<number, string>;
+  bits?: string;
+  desc?: string;
+  scale?: number;
+  value?: number;
+}
+
+/** 扫文档，把「系统状态① / 01=上电状态 / bit0=… / 获取电压/10 / 默认值：25」挂到对应字段 */
+function collectFieldMeta(text: string): Map<string, FieldMeta> {
+  const meta = new Map<string, FieldMeta>();
+  const get = (k: string) => {
+    if (!meta.has(k)) meta.set(k, {});
+    return meta.get(k)!;
+  };
+
+  let current = "";
+
+  for (const raw of text.split(/\r?\n/)) {
+    const cells = raw.split("\t").map((c) => c.trim()).filter(Boolean);
+    if (!cells.length) continue;
+
+    for (const cell of cells) {
+      const enumM = cell.match(/^(?:0x)?([0-9A-Fa-f]{1,2})\s*=\s*(.+)$/);
+      const bitM = cell.match(/^bit\s*(\d+)\s*(?:=\s*1)?\s*[：:]?\s*(.*)$/i);
+      const rangeM = cell.match(/^设置范围\s*[：:]\s*(-?\d+)\s*[-~]\s*(-?\d+)$/);
+      const defM = cell.match(/^默认值\s*[：:]\s*(-?\d+)$/);
+      const scaleM = cell.match(/\/(\d+)\s*[（(]\s*\d+\s*位小数/);
+
+      if (enumM && current) {
+        const key = parseInt(enumM[1], 16);
+        if (Number.isFinite(key)) get(current).enumMap = { ...(get(current).enumMap ?? {}), [key]: enumM[2].trim() };
+        continue;
+      }
+      if (bitM && current) {
+        const one = `bit${bitM[1]}${bitM[2] ? ` ${bitM[2].trim()}` : ""}`;
+        const prev = get(current).bits;
+        get(current).bits = prev ? `${prev}; ${one}` : one;
+        continue;
+      }
+      if (rangeM && current) {
+        get(current).desc = [get(current).desc, `范围 ${rangeM[1]}~${rangeM[2]}`].filter(Boolean).join(" · ");
+        continue;
+      }
+      if (defM && current) {
+        get(current).value = Number(defM[1]);
+        continue;
+      }
+      if (scaleM && current) {
+        const div = Number(scaleM[1]);
+        if (div > 0) get(current).scale = div;
+        get(current).desc = [get(current).desc, cell].filter(Boolean).join(" · ");
+        continue;
+      }
+
+      if (cell.length <= 24 && !/^\d+$/.test(cell)) {
+        const k = normName(cell);
+        if (k) {
+          current = k;
+          if (!get(k).desc) get(k).desc = cell;
+        }
+      }
+    }
+  }
+  return meta;
+}
+
+/** 把说明区语义合进字段 */
+function enrichFields(fields: PdlField[], text: string): PdlField[] {
+  const meta = collectFieldMeta(text);
+  if (!meta.size) return fields;
+  return fields.map((f) => {
+    const m = meta.get(normName(f.name));
+    if (!m) return f;
+    return {
+      ...f,
+      enumMap: m.enumMap ?? f.enumMap,
+      bits: m.bits ?? f.bits,
+      scale: m.scale ?? f.scale,
+      value: f.value ?? m.value,
+      desc: m.desc ?? f.desc,
+      type: m.enumMap ? "enum" : f.type,
+    } as PdlField;
+  });
+}
+
 /**
  * 自动合并成对的字节字段：
  *   A相电压H + A相电压L  ->  A相电压 (2B, ABCD)
@@ -415,7 +513,7 @@ function extractTsvMessages(text: string): { msgs: PdlMessage[]; groups: TsvGrou
       off += 1;
     }
 
-    const merged = mergeBytePairs(fields);
+    const merged = enrichFields(mergeBytePairs(fields), text);
     let o2 = 0;
     for (const f of merged) { f.offset = o2; o2 += f.size; }
     msgs.push({ id: `m${mId}`, name: fnName, fields: merged });
