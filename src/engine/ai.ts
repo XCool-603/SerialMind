@@ -774,6 +774,39 @@ JSON 结构：
 1. 文档没写清的校验算法，algorithm 必须为 null，不要猜。
 2. 每个字段必须给 sourceSpan 与 confidence。
 3. 字段偏移不得重叠，必须覆盖整帧。`;
+/** 发一轮对话，拿回 content 文本（自包含 prompt，适配丢 system 的中转站） */
+async function chatContent(cfg: AiConfig, messages: unknown[], timeoutMs = 25000): Promise<string> {
+  const res = await aiFetch(resolveChatUrl(cfg.baseUrl), cfg.apiKey, {
+    model: cfg.model,
+    temperature: 0,
+    messages,
+  }, timeoutMs);
+  if (!res.ok) throw new Error(`模型调用失败 ${res.status}：${(await res.text()).slice(0, 200)}`);
+  const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
+  return data.choices?.[0]?.message?.content ?? "";
+}
+
+/** 要模型输出 JSON：第一次不合格就带上它的回复再要一次，明确「只输出 JSON」 */
+async function chatJson(cfg: AiConfig, messages: unknown[], timeoutMs = 25000): Promise<{ value: unknown; error?: string }> {
+  const first = await chatContent(cfg, messages, timeoutMs);
+  const picked = extractJsonBlock(first);
+  if (picked.value) return picked;
+
+  const retry = [
+    ...messages,
+    { role: "assistant", content: first.slice(0, 2000) },
+    {
+      role: "user",
+      content:
+        "你上面这条回复不是合法 JSON。请只输出一个 JSON 对象：第一个字符必须是 { ，最后一个字符必须是 }；不要任何解释、不要提问、不要 Markdown 代码块。",
+    },
+  ];
+  const second = await chatContent(cfg, retry, timeoutMs);
+  const picked2 = extractJsonBlock(second);
+  if (picked2.value) return picked2;
+  return { value: null, error: `连续两次都没返回 JSON。最后一次内容：${second.slice(0, 100)}…` };
+}
+
 
 /**
  * 从模型返回里挖出 JSON：
@@ -837,18 +870,11 @@ export function extractJsonBlock(raw: string): { value: unknown; error?: string 
   return { value: null, error: `模型没按 JSON 返回，内容是：${s.slice(0, 80)}…` };
 }
 export async function remoteDraft(text: string, cfg: AiConfig): Promise<DraftResult> {
-  const res = await aiFetch(resolveChatUrl(cfg.baseUrl), cfg.apiKey, {
-      model: cfg.model,
-      temperature: 0,
-      messages: [
-        { role: "system", content: SYSTEM_PROMPT },
-        { role: "user", content: text.slice(0, 12000) },
-      ],
-    }, 25000);
-  if (!res.ok) throw new Error(`模型调用失败 ${res.status}：${(await res.text()).slice(0, 200)}`);
-  const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
-  const content = data.choices?.[0]?.message?.content ?? "";
-  const picked = extractJsonBlock(content);
+  const messages = [
+    { role: "system", content: SYSTEM_PROMPT },
+    { role: "user", content: `${SYSTEM_PROMPT}\n\n=== 待解析文档开始 ===\n${text.slice(0, 12000)}\n=== 待解析文档结束 ===\n\n现在请直接输出 JSON（只输出 JSON 对象本身，不要 Markdown、不要解释、不要提问）。` },
+  ];
+  const picked = await chatJson(cfg, messages);
   if (!picked.value) throw new Error(picked.error ?? "模型返回无法解析");
   const parsed = picked.value as {
     fields?: { name: string; type: string; size: number; offset?: number; byteOrder?: string; desc?: string; confidence?: number }[];
@@ -1052,19 +1078,11 @@ JSON 格式示例：
   "explanation": "简短设计意图"
 }`;
 
-  const res = await aiFetch(resolveChatUrl(cfg.baseUrl), cfg.apiKey, {
-      model: cfg.model,
-      temperature: 0.1,
-      messages: [
-        { role: "system", content: system },
-        { role: "user", content: `请根据需求编排用例：${userPrompt}` },
-      ],
-    }, 25000);
-
-  if (!res.ok) throw new Error(`DeepSeek 响应异常 ${res.status}：${(await res.text()).slice(0, 160)}`);
-  const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
-  const rawContent = data.choices?.[0]?.message?.content ?? "";
-  const picked = extractJsonBlock(rawContent);
+  const messages = [
+    { role: "system", content: system },
+    { role: "user", content: `请根据下面的需求编排自动化测试用例，并直接输出 JSON（只输出 JSON 对象，不要解释、不要提问）。\n\n需求：${userPrompt}` },
+  ];
+  const picked = await chatJson(cfg, messages);
   if (!picked.value) throw new Error(picked.error ?? "模型返回无法解析");
   const parsed = picked.value as GeneratedCaseDraft;
 
@@ -1180,19 +1198,11 @@ JSON 格式：
   "explanation": "设计意图"
 }`;
 
-  const res = await aiFetch(resolveChatUrl(cfg.baseUrl), cfg.apiKey, {
-      model: cfg.model,
-      temperature: 0.2,
-      messages: [
-        { role: "system", content: system },
-        { role: "user", content: `请设计产品：${userPrompt}` },
-      ],
-    }, 25000);
-
-  if (!res.ok) throw new Error(`DeepSeek 响应异常 ${res.status}：${(await res.text()).slice(0, 160)}`);
-  const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
-  const rawContent = data.choices?.[0]?.message?.content ?? "";
-  const picked = extractJsonBlock(rawContent);
+  const messages = [
+    { role: "system", content: system },
+    { role: "user", content: `请根据下面的需求设计整套产品，并直接输出 JSON（只输出 JSON 对象，不要解释、不要提问）。\n\n需求：${userPrompt}` },
+  ];
+  const picked = await chatJson(cfg, messages);
   if (!picked.value) throw new Error(picked.error ?? "模型返回无法解析");
   const parsed = picked.value as GeneratedProductDraft;
 
