@@ -70,8 +70,15 @@ export function CasePage() {
   const [tagFilter, setTagFilter] = useState("全部");
   const liveStreamEndRef = useRef<HTMLDivElement | null>(null);
   const [collapsedActions, setCollapsedActions] = useState<Record<string, boolean>>({});
+  /** 「清空流水」后要真的清空显示，包括上一次运行的结果 */
+  const [streamHidden, setStreamHidden] = useState(false);
 
   const active = cases.find((c) => c.id === activeCaseId) ?? cases[0];
+
+  // 切换用例时恢复流水显示
+  useEffect(() => {
+    setStreamHidden(false);
+  }, [active?.id]);
 
   useEffect(() => {
     if (running && liveStreamEndRef.current) {
@@ -80,6 +87,7 @@ export function CasePage() {
   }, [liveSteps.length, running]);
 
   const handleRunClick = () => {
+    setStreamHidden(false);
     if (running) {
       requestStop();
       return;
@@ -413,7 +421,10 @@ export function CasePage() {
                     <button
                       className="btn sm"
                       style={{ height: 24, fontSize: 10, padding: "0 8px" }}
-                      onClick={() => useStore.setState({ liveSteps: [] })}
+                      onClick={() => {
+                        useStore.setState({ liveSteps: [] });
+                        setStreamHidden(true);
+                      }}
                       title="清空流水日志"
                     >
                       清空流水
@@ -433,7 +444,7 @@ export function CasePage() {
                   background: "var(--bg-main)",
                 }}
               >
-                {(running || liveSteps.length > 0 ? liveSteps : lastRun?.items ?? []).map((step, idx) => (
+                {(streamHidden ? [] : running || liveSteps.length > 0 ? liveSteps : lastRun?.items ?? []).map((step, idx) => (
                   <div
                     key={step.stepId || idx}
                     style={{
