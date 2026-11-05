@@ -775,6 +775,67 @@ JSON 结构：
 2. 每个字段必须给 sourceSpan 与 confidence。
 3. 字段偏移不得重叠，必须覆盖整帧。`;
 
+/**
+ * 从模型返回里挖出 JSON：
+ * 模型经常先来一段"这是一份……"的解释，再贴 ```json 代码块，甚至 JSON 里还有注释/尾逗号。
+ * 这里做：去代码块 → 找第一个 { 或 [ → 括号配对截取 → 宽松修复 → parse
+ */
+export function extractJsonBlock(raw: string): { value: unknown; error?: string } {
+  let s = (raw ?? "").trim();
+  if (!s) return { value: null, error: "模型返回为空" };
+
+  // 去掉 ``` 围栏
+  s = s.replace(/```json/gi, "```").replace(/```/g, "").trim();
+
+  const tryParse = (x: string) => {
+    try {
+      return { ok: true as const, v: JSON.parse(x) };
+    } catch {
+      return { ok: false as const };
+    }
+  };
+
+  const direct = tryParse(s);
+  if (direct.ok) return { value: direct.v };
+
+  // 找第一个 { 或 [，按括号配对截取
+  const start = s.search(/[{[]/);
+  if (start >= 0) {
+    const open = s[start];
+    const close = open === "{" ? "}" : "]";
+    let depth = 0;
+    let inStr = false;
+    let esc = false;
+    for (let i = start; i < s.length; i++) {
+      const c = s[i];
+      if (inStr) {
+        if (esc) esc = false;
+        else if (c === "\\") esc = true;
+        else if (c === '"') inStr = false;
+        continue;
+      }
+      if (c === '"') inStr = true;
+      else if (c === open) depth++;
+      else if (c === close) {
+        depth--;
+        if (depth === 0) {
+          const slice = s.slice(start, i + 1);
+          const r = tryParse(slice);
+          if (r.ok) return { value: r.v };
+          // 宽松修复：去行注释 / 尾逗号
+          const cleaned = slice
+            .replace(/^\s*\/\/.*$/gm, "")
+            .replace(/,\s*([}\]])/g, "$1");
+          const r2 = tryParse(cleaned);
+          if (r2.ok) return { value: r2.v };
+          return { value: null, error: `模型返回的内容不是合法 JSON（开头：${slice.slice(0, 60)}…）` };
+        }
+      }
+    }
+  }
+
+  return { value: null, error: `模型没按 JSON 返回，内容是：${s.slice(0, 80)}…` };
+}
 export async function remoteDraft(text: string, cfg: AiConfig): Promise<DraftResult> {
   const res = await aiFetch(resolveChatUrl(cfg.baseUrl), cfg.apiKey, {
       model: cfg.model,
@@ -787,8 +848,9 @@ export async function remoteDraft(text: string, cfg: AiConfig): Promise<DraftRes
   if (!res.ok) throw new Error(`模型调用失败 ${res.status}：${(await res.text()).slice(0, 200)}`);
   const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
   const content = data.choices?.[0]?.message?.content ?? "";
-  const jsonText = content.replace(/```json/gi, "").replace(/```/g, "").trim();
-  const parsed = JSON.parse(jsonText) as {
+  const picked = extractJsonBlock(content);
+  if (!picked.value) throw new Error(picked.error ?? "模型返回无法解析");
+  const parsed = picked.value as {
     fields?: { name: string; type: string; size: number; offset?: number; byteOrder?: string; desc?: string; confidence?: number }[];
     checksum?: { algorithm?: string | null };
     unresolved?: string[];
@@ -1002,8 +1064,9 @@ JSON 格式示例：
   if (!res.ok) throw new Error(`DeepSeek 响应异常 ${res.status}：${(await res.text()).slice(0, 160)}`);
   const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
   const rawContent = data.choices?.[0]?.message?.content ?? "";
-  const jsonText = rawContent.replace(/```json/gi, "").replace(/```/g, "").trim();
-  const parsed = JSON.parse(jsonText) as GeneratedCaseDraft;
+  const picked = extractJsonBlock(rawContent);
+  if (!picked.value) throw new Error(picked.error ?? "模型返回无法解析");
+  const parsed = picked.value as GeneratedCaseDraft;
 
   // 校验补齐协议 ID
   const fixedActions: GeneratedCaseAction[] = (parsed.actions ?? []).map((act) => {
@@ -1129,8 +1192,9 @@ JSON 格式：
   if (!res.ok) throw new Error(`DeepSeek 响应异常 ${res.status}：${(await res.text()).slice(0, 160)}`);
   const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
   const rawContent = data.choices?.[0]?.message?.content ?? "";
-  const jsonText = rawContent.replace(/```json/gi, "").replace(/```/g, "").trim();
-  const parsed = JSON.parse(jsonText) as GeneratedProductDraft;
+  const picked = extractJsonBlock(rawContent);
+  if (!picked.value) throw new Error(picked.error ?? "模型返回无法解析");
+  const parsed = picked.value as GeneratedProductDraft;
 
   // 格式化字段
   const formattedProtocols = (parsed.protocols ?? []).map((p, pIdx) => {
