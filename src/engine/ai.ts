@@ -781,6 +781,20 @@ JSON 结构：
 1. 文档没写清的校验算法，algorithm 必须为 null，不要猜。
 2. 每个字段必须给 sourceSpan 与 confidence。
 3. 字段偏移不得重叠，必须覆盖整帧。`;
+/** 从文档里看出帧结构关键词时，给模型一些确定性提示，减少它「不敢猜」的待确认项 */
+function frameHints(text: string): string {
+  const hits: string[] = [];
+  if (/头反码/.test(text)) hits.push("头反码 = 0xFF - 数据头（1 字节）");
+  if (/长度反码/.test(text)) hits.push("长度反码 = 0xFF - 数据长度（1 字节）");
+  if (/数据头/.test(text)) hits.push("帧起始为「数据头」。不同数据头（如 DE21 / DB24）代表不同方向的协议");
+  if (/指令/.test(text) && /0x[0-9A-Fa-f]{2}/.test(text))
+    hits.push("每一行（每条指令 0xNN）都应输出成一条独立报文 message，name 用「功能说明」；不要把所有指令塞进一条报文的变长数据域");
+  if (/校验和|累加和/.test(text)) hits.push('校验算法优先按「累加和取低 8 位 ADD8」给出 checksum.algorithm = "ADD8"；范围是校验和之前的全部字节');
+  if (/\bH\b.*\bL\b|高字节|低字节/.test(text)) hits.push("成对的 H/L 字段合并成一个多字节字段，高字节在前 → byteOrder = \"ABCD\"");
+  if (/示例帧|样例帧/.test(text)) hits.push("用示例帧反推字段总长度与偏移，务必让总长度等于示例帧字节数");
+  if (!hits.length) return "";
+  return `\n【从文档中识别到的结构提示（请遵循）】\n- ${hits.join("\n- ")}\n`;
+}
 /** 发一轮对话，拿回 content 文本（自包含 prompt，适配丢 system 的中转站） */
 async function chatContent(cfg: AiConfig, messages: unknown[], timeoutMs = 60000): Promise<string> {
   const res = await aiFetch(resolveChatUrl(cfg.baseUrl), cfg.apiKey, {
@@ -879,7 +893,7 @@ export function extractJsonBlock(raw: string): { value: unknown; error?: string 
 export async function remoteDraft(text: string, cfg: AiConfig): Promise<DraftResult> {
   const messages = [
     { role: "system", content: SYSTEM_PROMPT },
-    { role: "user", content: `${SYSTEM_PROMPT}\n\n=== 待解析文档开始 ===\n${text.slice(0, 12000)}\n=== 待解析文档结束 ===\n\n现在请直接输出 JSON（只输出 JSON 对象本身，不要 Markdown、不要解释、不要提问）。` },
+    { role: "user", content: `${SYSTEM_PROMPT}\n${frameHints(text)}\n=== 待解析文档开始 ===\n${text.slice(0, 12000)}\n=== 待解析文档结束 ===\n\n现在请直接输出 JSON（只输出 JSON 对象本身，不要 Markdown、不要解释、不要提问）。` },
   ];
   const picked = await chatJson(cfg, messages);
   if (!picked.value) throw new Error(picked.error ?? "模型返回无法解析");

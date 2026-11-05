@@ -130,7 +130,23 @@ export function AiDraftPanel() {
     setBusy(true);
     try {
       saveAiConfig(cfg);
-      setDraft(await remoteDraft(doc, cfg));
+      const remote = await remoteDraft(doc, cfg);
+      // 模型给的通用帧常常对不上样例（多指令协议），本地解析反而更准：
+      // 远程认为能对上就直接用；对不上时优先选本地能对上的那份
+      let chosen = remote;
+      try {
+        const local = localDraft(doc);
+        const localBetter =
+          (!remote.roundTripOk && local.roundTripOk) ||
+          (remote.protocol.messages.length === 1 && local.protocol.messages.length > 1);
+        if (localBetter) {
+          chosen = local;
+          setErr("模型给的是通用帧结构，示例帧对不上；已改用本地规则抽取的结果（按指令拆成多条报文）");
+        }
+      } catch {
+        /* 本地失败就用远程结果 */
+      }
+      setDraft(chosen);
     } catch (e) {
       setErr(`DeepSeek 调用失败：${(e as Error).message}，已自动使用本地规则抽取`);
       try {
