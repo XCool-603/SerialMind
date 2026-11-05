@@ -783,7 +783,7 @@ export async function remoteDraft(text: string, cfg: AiConfig): Promise<DraftRes
         { role: "system", content: SYSTEM_PROMPT },
         { role: "user", content: text.slice(0, 12000) },
       ],
-    }, 45000);
+    }, 25000);
   if (!res.ok) throw new Error(`模型调用失败 ${res.status}：${(await res.text()).slice(0, 200)}`);
   const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
   const content = data.choices?.[0]?.message?.content ?? "";
@@ -997,7 +997,7 @@ JSON 格式示例：
         { role: "system", content: system },
         { role: "user", content: `请根据需求编排用例：${userPrompt}` },
       ],
-    }, 45000);
+    }, 25000);
 
   if (!res.ok) throw new Error(`DeepSeek 响应异常 ${res.status}：${(await res.text()).slice(0, 160)}`);
   const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
@@ -1124,7 +1124,7 @@ JSON 格式：
         { role: "system", content: system },
         { role: "user", content: `请设计产品：${userPrompt}` },
       ],
-    }, 45000);
+    }, 25000);
 
   if (!res.ok) throw new Error(`DeepSeek 响应异常 ${res.status}：${(await res.text()).slice(0, 160)}`);
   const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };

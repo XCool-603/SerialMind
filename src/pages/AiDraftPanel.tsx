@@ -71,6 +71,8 @@ export function AiDraftPanel() {
   const [productDraft, setProductDraft] = useState<GeneratedProductDraft | null>(null);
 
   const [busy, setBusy] = useState(false);
+  /** 远程生成时的即时提示：点下去立刻有反馈，别像卡死 */
+  const [progress, setProgress] = useState<string | null>(null);
   const [err, setErr] = useState("");
   const [cfg, setCfg] = useState<AiConfig>(() => loadAiConfig());
   const [showCfg, setShowCfg] = useState(false);
@@ -101,12 +103,14 @@ export function AiDraftPanel() {
     } catch (e) {
       setErr((e as Error).message);
     } finally {
+      setProgress(null);
       setBusy(false);
     }
   };
 
   const runProtocolRemote = async () => {
     setErr("");
+    setProgress(`正在请求 ${resolveChatUrl(cfg.baseUrl)} …（最多 25 秒，失败会自动回退本地抽取）`);
     if (!cfg.apiKey.trim()) {
       setErr("未配置 API Key：可在下方「DeepSeek 模型设置」中填写，或使用本地确定性抽取");
       setShowCfg(true);
@@ -124,6 +128,7 @@ export function AiDraftPanel() {
         /* noop */
       }
     } finally {
+      setProgress(null);
       setBusy(false);
     }
   };
@@ -148,12 +153,14 @@ export function AiDraftPanel() {
     } catch (e) {
       setErr((e as Error).message);
     } finally {
+      setProgress(null);
       setBusy(false);
     }
   };
 
   const runCaseRemote = async () => {
     setErr("");
+    setProgress(`正在请求 ${resolveChatUrl(cfg.baseUrl)} …（最多 25 秒，失败会自动回退本地规则）`);
     if (!cfg.apiKey.trim()) {
       setErr("未配置 DeepSeek API Key，已为您使用本地离线规则引擎生成");
       runCaseLocal();
@@ -168,6 +175,7 @@ export function AiDraftPanel() {
       setErr(`DeepSeek 调用失败：${(e as Error).message}，已回退本地引擎推演`);
       runCaseLocal();
     } finally {
+      setProgress(null);
       setBusy(false);
     }
   };
@@ -211,12 +219,14 @@ export function AiDraftPanel() {
     } catch (e) {
       setErr((e as Error).message);
     } finally {
+      setProgress(null);
       setBusy(false);
     }
   };
 
   const runProductRemote = async () => {
     setErr("");
+    setProgress(`正在请求 ${resolveChatUrl(cfg.baseUrl)} …（最多 25 秒，失败会自动回退本地规则）`);
     if (!cfg.apiKey.trim()) {
       setErr("未配置 DeepSeek API Key，已为您使用本地离线方案架构引擎");
       runProductLocal();
@@ -231,6 +241,7 @@ export function AiDraftPanel() {
       setErr(`DeepSeek 调用失败：${(e as Error).message}，已回退本地生成`);
       runProductLocal();
     } finally {
+      setProgress(null);
       setBusy(false);
     }
   };
@@ -368,7 +379,7 @@ export function AiDraftPanel() {
                     disabled={busy}
                   >
                     <Icon cp={IC.ai} size={11} color="var(--purple)" />
-                    DeepSeek 模型生成
+                    {busy ? "生成中…" : "DeepSeek 模型生成"}
                   </button>
                   <button className="btn sm" onClick={() => setShowCfg((v) => !v)}>
                     DeepSeek 设置
@@ -491,7 +502,7 @@ export function AiDraftPanel() {
                     disabled={busy}
                   >
                     <Icon cp={IC.ai} size={11} color="var(--purple)" />
-                    DeepSeek 模型生成
+                    {busy ? "生成中…" : "DeepSeek 模型生成"}
                   </button>
                   <button className="btn sm" onClick={() => setShowCfg((v) => !v)}>
                     DeepSeek 设置
@@ -689,6 +700,14 @@ export function AiDraftPanel() {
             </>
           )}
         </div>
+
+        {/* 远程请求中的即时反馈 */}
+        {progress && (
+          <div className="ai-err" style={{ color: "var(--accent)" }}>
+            <Icon cp={IC.history} size={11} color="var(--accent)" />
+            <span>{progress}</span>
+          </div>
+        )}
 
         {/* 错误提示 */}
         {err && (
